@@ -769,7 +769,5 @@ class Welcomer(commands.Cog):
 
 # Modmail Plugin Entry Point
 
-def setup(bot):
-    bot.add_cog(
-        Welcomer(bot)
-    )
+async def setup(bot):
+    await bot.add_cog(Welcomer(bot))
