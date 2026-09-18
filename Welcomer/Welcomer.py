@@ -1,1138 +1,680 @@
 import json
-import asyncio
+import string
 
 import discord
 from discord.ext import commands
 
-from .models import apply_vars, SafeString
+
+class SafeFormatter(string.Formatter):
+    def get_field(self, field_name, args, kwargs):
+        try:
+            return super().get_field(field_name, args, kwargs)
+        except (KeyError, AttributeError, IndexError, TypeError):
+            return "", field_name
 
 
-====
-# Helpers
+def apply_vars(message, member=None, guild=None, bot=None, invite=None):
+    if not isinstance(message, str):
+        return message
 
-def default_invite():
-    """
-    Fallback value when the actual invite cannot be detected.
-    """
-    return SafeString("{unable to get invite}")
+    variables = {
+        "member": member,
+        "guild": guild,
+        "bot": bot,
+        "invite": invite or "",
+    }
+
+    try:
+        return SafeFormatter().format(message, **variables)
+    except Exception:
+        return message
 
 
-# Message Modal
+def apply_vars_dict(data, member, guild, bot, invite):
+    if isinstance(data, dict):
+        return {
+            key: apply_vars_dict(
+                value,
+                member,
+                guild,
+                bot,
+                invite
+            )
+            for key, value in data.items()
+        }
+
+    if isinstance(data, list):
+        return [
+            apply_vars_dict(
+                value,
+                member,
+                guild,
+                bot,
+                invite
+            )
+            for value in data
+        ]
+
+    if isinstance(data, str):
+        return apply_vars(
+            data,
+            member=member,
+            guild=guild,
+            bot=bot,
+            invite=invite
+        )
+
+    return data
+
 
 class MessageModal(discord.ui.Modal):
-    def __init__(
-        self,
-        cog,
-        guild_id,
-        channel,
-        current_message=None
-    ):
-        super().__init__(title="Welcome Message")
+    def __init__(self, cog, guild_id):
+        super().__init__(title="Set Welcome Message")
 
         self.cog = cog
         self.guild_id = guild_id
-        self.channel = channel
+
+        config = cog.config_cache.get(guild_id, {})
+        current = config.get("message", "")
 
         self.message_input = discord.ui.TextInput(
             label="Welcome Message",
-            placeholder=(
-                "Welcome {member.mention} to {guild.name}!"
-            ),
             style=discord.TextStyle.paragraph,
+            placeholder="Enter the message members will receive...",
+            default=current if current and not current.startswith("{") else "",
             required=True,
-            max_length=4000,
-            default=current_message or ""
+            max_length=4000
         )
 
         self.add_item(self.message_input)
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-        message = self.message_input.value
+    async def on_submit(self, interaction: discord.Interaction):
+        message = str(self.message_input.value)
 
-        # Validate / format the message before saving.
-        formatted = self.cog.format_message(
-            interaction.user,
-            message,
-            default_invite()
-        )
+        config = await self.cog.get_config(self.guild_id)
 
-        if formatted is None:
-            await interaction.response.send_message(
-                "❌ Invalid welcome message.",
-                ephemeral=True
-            )
-            return
+        config["message"] = message
+        config["enabled"] = True
 
-        await self.cog.save_config(
-            self.guild_id,
-            self.channel,
-            message,
-            "message"
-        )
+        await self.cog.save_config(self.guild_id, config)
 
         await interaction.response.send_message(
-            f"✅ Welcome message saved for "
-            f"{self.channel.mention}.",
+            "Welcome message saved.",
             ephemeral=True
         )
 
 
-# Embed JSON Modal
-
 class EmbedModal(discord.ui.Modal):
-    def __init__(
-        self,
-        cog,
-        guild_id,
-        channel,
-        current_message=None
-    ):
-        super().__init__(title="Welcome Embed JSON")
+    def __init__(self, cog, guild_id):
+        super().__init__(title="Set Embed JSON")
 
         self.cog = cog
         self.guild_id = guild_id
-        self.channel = channel
 
-        self.embed_input = discord.ui.TextInput(
-            label="Embed JSON",
-            placeholder=(
-                '{"embeds":[{"title":"Welcome!",'
-                '"description":"Hello {member.mention}!"}]}'
-            ),
+        config = cog.config_cache.get(guild_id, {})
+        current = config.get("message", "")
+
+        if not current:
+            current = '{\n  "embeds": [\n    {\n      "title": "Welcome",\n      "description": "Welcome {member.mention}!"\n    }\n  ]\n}'
+
+        self.json_input = discord.ui.TextInput(
+            label="Discord Message JSON",
             style=discord.TextStyle.paragraph,
+            placeholder='{"embeds":[{"title":"Welcome"}]}',
+            default=current[:4000],
             required=True,
-            max_length=4000,
-            default=current_message or ""
+            max_length=4000
         )
 
-        self.add_item(self.embed_input)
+        self.add_item(self.json_input)
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-        raw_json = self.embed_input.value
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = str(self.json_input.value)
 
-        # Use the same parser as Test / Join.
-        # This means the JSON accepted by the modal is
-        # exactly the same JSON that the plugin can actually send.
-        formatted = self.cog.format_message(
-            interaction.user,
-            raw_json,
-            default_invite()
-        )
-
-        if formatted is None:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
             await interaction.response.send_message(
-                "❌ Invalid Embed JSON.\n\n"
-                "Supported formats include:\n"
-                "• Discord message JSON with `embeds: []`\n"
-                "• A single embed object\n"
-                "• `{ \"embed\": { ... } }`",
+                f"Invalid JSON:\n{exc}",
                 ephemeral=True
             )
             return
 
-        await self.cog.save_config(
-            self.guild_id,
-            self.channel,
-            raw_json,
-            "embed"
-        )
+        if not isinstance(data, dict):
+            await interaction.response.send_message(
+                "The JSON root must be an object.",
+                ephemeral=True
+            )
+            return
+
+        try:
+            self.cog.validate_message_payload(data)
+        except ValueError as exc:
+            await interaction.response.send_message(
+                str(exc),
+                ephemeral=True
+            )
+            return
+
+        config = await self.cog.get_config(self.guild_id)
+
+        config["message"] = raw
+        config["enabled"] = True
+
+        await self.cog.save_config(self.guild_id, config)
 
         await interaction.response.send_message(
-            f"✅ Welcome embed saved for "
-            f"{self.channel.mention}.",
+            "Embed JSON saved.",
             ephemeral=True
         )
 
 
-# Configuration View
-
 class WelcomerView(discord.ui.View):
-
-    def __init__(
-        self,
-        cog,
-        author_id,
-        guild_id,
-        channel,
-        config=None
-    ):
+    def __init__(self, cog, guild_id, channel):
         super().__init__(timeout=300)
 
         self.cog = cog
-        self.author_id = author_id
         self.guild_id = guild_id
         self.channel = channel
-        self.config = config
-
-    # --------------------------------------------------------
-    # Interaction Permission
-    # --------------------------------------------------------
-
-    async def interaction_check(
-        self,
-        interaction: discord.Interaction
-    ):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message(
-                "❌ Only the person who opened this "
-                "configuration panel can use these buttons.",
-                ephemeral=True
-            )
-            return False
-
-        return True
-
-    # --------------------------------------------------------
-    # Message Button
-    # --------------------------------------------------------
 
     @discord.ui.button(
         label="Message",
-        style=discord.ButtonStyle.primary
+        style=discord.ButtonStyle.primary,
+        emoji="💬"
     )
     async def message_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        current = None
-
-        if (
-            self.config
-            and self.config.get("type") == "message"
-        ):
-            current = self.config.get("message")
-
         await interaction.response.send_modal(
             MessageModal(
                 self.cog,
-                self.guild_id,
-                self.channel,
-                current
+                self.guild_id
             )
         )
 
-    # --------------------------------------------------------
-    # Embed JSON Button
-    # --------------------------------------------------------
-
     @discord.ui.button(
         label="Embed JSON",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.primary,
+        emoji="📝"
     )
     async def embed_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        current = None
-
-        if (
-            self.config
-            and self.config.get("type") == "embed"
-        ):
-            current = self.config.get("message")
-
         await interaction.response.send_modal(
             EmbedModal(
                 self.cog,
-                self.guild_id,
-                self.channel,
-                current
+                self.guild_id
             )
         )
 
-    # --------------------------------------------------------
-    # Test Button
-    # --------------------------------------------------------
-
     @discord.ui.button(
         label="Test",
-        style=discord.ButtonStyle.success
+        style=discord.ButtonStyle.success,
+        emoji="🧪"
     )
     async def test_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        config = await self.cog.get_config(
-            self.guild_id
-        )
-
-        if not config:
-            await interaction.response.send_message(
-                "❌ No Welcomer configuration exists yet.",
-                ephemeral=True
-            )
-            return
+        config = await self.cog.get_config(self.guild_id)
 
         message = config.get("message")
 
         if not message:
             await interaction.response.send_message(
-                "❌ No welcome message has been configured.",
-                ephemeral=True
-            )
-            return
-
-        # During Test, {member.*} refers to the user
-        # who clicked the Test button.
-        invite = default_invite()
-
-        formatted = self.cog.format_message(
-            interaction.user,
-            message,
-            invite
-        )
-
-        if formatted is None:
-            await interaction.response.send_message(
-                "❌ The saved welcome configuration "
-                "is invalid.",
+                "No welcome message has been configured.",
                 ephemeral=True
             )
             return
 
         try:
-            await self.channel.send(
-                **formatted
+            payload = self.cog.format_message(
+                interaction.user,
+                message,
+                self.cog.default_invite(self.guild_id)
             )
-
+        except Exception as exc:
             await interaction.response.send_message(
-                "✅ Test welcome message sent.",
+                f"Unable to format the message:\n{exc}",
                 ephemeral=True
             )
+            return
 
-        except discord.Forbidden:
+        try:
+            await self.channel.send(**payload)
+
             await interaction.response.send_message(
-                "❌ I don't have permission to send messages "
-                f"in {self.channel.mention}.",
+                "Test message sent.",
                 ephemeral=True
             )
 
         except discord.HTTPException as exc:
             await interaction.response.send_message(
-                "❌ Discord rejected the message:\n"
-                f"```text\n{exc}\n```",
+                f"Discord rejected the message:\n{exc}",
                 ephemeral=True
             )
 
-    # --------------------------------------------------------
-    # Disable Button
-    # --------------------------------------------------------
-
     @discord.ui.button(
         label="Disable",
-        style=discord.ButtonStyle.danger
+        style=discord.ButtonStyle.danger,
+        emoji="⛔"
     )
     async def disable_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        await self.cog.disable_config(
-            self.guild_id
+        config = await self.cog.get_config(self.guild_id)
+
+        config["enabled"] = False
+
+        await self.cog.save_config(
+            self.guild_id,
+            config
         )
 
-        embed = discord.Embed(
-            title="Welcomer Disabled",
-            description=(
-                "The Welcomer has been disabled "
-                f"for {self.channel.mention}."
-            ),
-            color=discord.Color.red()
+        await interaction.response.send_message(
+            "Welcomer has been disabled.",
+            ephemeral=True
         )
 
-        await interaction.response.edit_message(
-            embed=embed,
-            view=None
+    @discord.ui.button(
+        label="Enable",
+        style=discord.ButtonStyle.secondary,
+        emoji="✅"
+    )
+    async def enable_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        config = await self.cog.get_config(self.guild_id)
+
+        if not config.get("message"):
+            await interaction.response.send_message(
+                "Please configure a welcome message first.",
+                ephemeral=True
+            )
+            return
+
+        config["enabled"] = True
+
+        await self.cog.save_config(
+            self.guild_id,
+            config
         )
 
+        await interaction.response.send_message(
+            "Welcomer has been enabled.",
+            ephemeral=True
+        )
 
-# Welcomer Cog
 
 class Welcomer(commands.Cog):
-
     def __init__(self, bot):
         self.bot = bot
 
-        # ----------------------------------------------------
-        # Modmail Plugin Database
-        #
-        # Support both newer and older Modmail database APIs.
-        # ----------------------------------------------------
+        self.db = bot.plugin_db.get_partition(self)
 
-        if hasattr(bot, "api") and hasattr(
-            bot.api,
-            "get_plugin_partition"
-        ):
-            self.db = bot.api.get_plugin_partition(self)
-
-        elif hasattr(bot, "plugin_db") and hasattr(
-            bot.plugin_db,
-            "get_partition"
-        ):
-            self.db = bot.plugin_db.get_partition(self)
-
-        else:
-            raise RuntimeError(
-                "Unable to find a compatible Modmail "
-                "plugin database API."
-            )
-
-        # ----------------------------------------------------
-        # Invite Cache
-        #
-        # guild_id -> {
-        #     invite_id: uses
-        # }
-        # ----------------------------------------------------
+        self.config_cache = {}
 
         self.invite_cache = {}
 
-        # Start invite cache task.
-        self.invite_cache_task = (
-            bot.loop.create_task(
-                self.populate_invite_cache()
-            )
+        bot.loop.create_task(
+            self.populate_invite_cache()
         )
 
-    # Cog Unload
-    
-    def cog_unload(self):
-        if (
-            hasattr(self, "invite_cache_task")
-            and self.invite_cache_task
-        ):
-            self.invite_cache_task.cancel()
-
-    # Invite Cache
-    
-    async def populate_invite_cache(self):
-        """
-        Populate invite usage cache for every guild.
-        """
-
-        await self.bot.wait_until_ready()
-
-        for guild in self.bot.guilds:
-            await self.update_invite_cache(guild)
-
-    async def update_invite_cache(self, guild):
-        """
-        Refresh the invite cache for one guild.
-        """
-
-        try:
-            invites = await guild.invites()
-
-        except discord.Forbidden:
-            self.invite_cache[guild.id] = {}
-            return
-
-        except discord.HTTPException:
-            self.invite_cache[guild.id] = {}
-            return
-
-        self.invite_cache[guild.id] = {
-            invite.id: (
-                invite.uses or 0
-            )
-            for invite in invites
-        }
-
-    async def get_used_invite(self, guild):
-        """
-        Try to detect which invite was used.
-
-        Returns:
-            discord.Invite
-            or
-            default_invite()
-        """
-
-        old_cache = self.invite_cache.get(
-            guild.id,
-            {}
-        )
-
-        try:
-            invites = await guild.invites()
-
-        except discord.Forbidden:
-            return default_invite()
-
-        except discord.HTTPException:
-            return default_invite()
-
-        new_cache = {
-            invite.id: (
-                invite.uses or 0
-            )
-            for invite in invites
-        }
-
-        for invite in invites:
-
-            old_uses = old_cache.get(
-                invite.id,
-                0
-            )
-
-            new_uses = invite.uses or 0
-
-            if new_uses > old_uses:
-                self.invite_cache[guild.id] = new_cache
-
-                return invite
-
-        # Update cache even if we didn't find the invite.
-
-        self.invite_cache[guild.id] = new_cache
-
-        return default_invite()
-
-    # Database
-    
     async def get_config(self, guild_id):
-        """
-        Get Welcomer configuration for a guild.
-        """
+        if guild_id in self.config_cache:
+            return self.config_cache[guild_id]
 
-        document = await self.db.find_one(
-            {
-                "_id": str(guild_id)
+        data = await self.db.find_one(
+            {"_id": str(guild_id)}
+        )
+
+        if data:
+            data.pop("_id", None)
+        else:
+            data = {
+                "channel_id": None,
+                "message": None,
+                "enabled": False
             }
-        )
 
-        if not document:
-            return None
+        self.config_cache[guild_id] = data
 
-        return document.get(
-            "welcomer"
-        )
+        return data
 
-    async def save_config(
-        self,
-        guild_id,
-        channel,
-        message,
-        message_type
-    ):
-        """
-        Save Welcomer configuration.
-        """
+    async def save_config(self, guild_id, config):
+        self.config_cache[guild_id] = config
 
-        await self.db.find_one_and_update(
-            {
-                "_id": str(guild_id)
-            },
-            {
-                "$set": {
-                    "welcomer": {
-                        "channel": str(channel.id),
-                        "message": message,
-                        "type": message_type,
-                        "enabled": True
-                    }
-                }
-            },
+        data = dict(config)
+        data["_id"] = str(guild_id)
+
+        await self.db.replace_one(
+            {"_id": str(guild_id)},
+            data,
             upsert=True
         )
 
-    async def disable_config(
-        self,
-        guild_id
-    ):
-        """
-        Disable Welcomer for a guild.
-        """
-
-        await self.db.find_one_and_update(
-            {
-                "_id": str(guild_id)
-            },
-            {
-                "$set": {
-                    "welcomer.enabled": False
-                }
-            },
-            upsert=True
-        )
-
-    # Variable Replacement
-    
-    def apply_vars_dict(
-        self,
-        member,
-        message,
-        invite
-    ):
-        """
-        Recursively replace variables inside JSON.
-
-        Supports variables in:
-        - strings
-        - dictionaries
-        - lists
-        """
-
-        if isinstance(message, dict):
-
-            result = {}
-
-            for key, value in message.items():
-
-                result[key] = self.apply_vars_dict(
-                    member,
-                    value,
-                    invite
+    def validate_message_payload(self, data):
+        if "embeds" in data:
+            if not isinstance(data["embeds"], list):
+                raise ValueError(
+                    '`"embeds"` must be an array.'
                 )
 
-            return result
-
-        if isinstance(message, list):
-
-            return [
-                self.apply_vars_dict(
-                    member,
-                    item,
-                    invite
+            if len(data["embeds"]) > 10:
+                raise ValueError(
+                    "Discord allows a maximum of 10 embeds."
                 )
-                for item in message
-            ]
 
-        if isinstance(message, str):
+            for index, embed in enumerate(data["embeds"]):
+                if not isinstance(embed, dict):
+                    raise ValueError(
+                        f'Embed #{index + 1} must be an object.'
+                    )
 
-            return apply_vars(
-                self,
-                member,
-                message,
-                invite
+                try:
+                    discord.Embed.from_dict(embed)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Invalid embed #{index + 1}: {exc}"
+                    )
+
+        elif "embed" in data:
+            if not isinstance(data["embed"], dict):
+                raise ValueError(
+                    '`"embed"` must be an object.'
+                )
+
+            try:
+                discord.Embed.from_dict(
+                    data["embed"]
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid embed: {exc}"
+                )
+
+        elif any(
+            key in data
+            for key in (
+                "title",
+                "description",
+                "color",
+                "fields",
+                "footer",
+                "author",
+                "thumbnail",
+                "image"
             )
+        ):
+            try:
+                discord.Embed.from_dict(data)
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid embed: {exc}"
+                )
 
-        return message
+        else:
+            if "content" not in data:
+                raise ValueError(
+                    'JSON must contain `"content"` or `"embeds"`.'
+                )
 
-    # Message Formatting
-    
     def format_message(
         self,
         member,
         message,
-        invite
+        invite=None
     ):
-        """
-        Convert saved configuration into kwargs
-        accepted by discord.py's channel.send().
-
-        Supported:
-
-        1. Plain text
-
-            Hello {member.mention}
-
-        2. Direct Embed JSON
-
-            {
-                "title": "Welcome!",
-                "description": "Hello!"
-            }
-
-        3. Wrapped Embed JSON
-
-            {
-                "embed": {
-                    "title": "Welcome!"
-                }
-            }
-
-        4. Full Discord message JSON
-
-            {
-                "content": "Hello!",
-                "embeds": [
-                    {
-                        "title": "Welcome!"
-                    }
-                ],
-                "components": []
-            }
-        """
-
-        if not isinstance(
-            message,
-            str
-        ):
-            return None
-
-        # ----------------------------------------------------
-        # Try JSON first.
-        # ----------------------------------------------------
+        guild = getattr(member, "guild", None)
 
         try:
             data = json.loads(message)
-
-        except json.JSONDecodeError:
-
-            # Not JSON -> normal text message.
-            content = apply_vars(
-                self,
-                member,
-                message,
-                invite
-            )
-
+        except (json.JSONDecodeError, TypeError):
             return {
-                "content": content
+                "content": apply_vars(
+                    message,
+                    member=member,
+                    guild=guild,
+                    bot=self.bot,
+                    invite=invite
+                )
             }
 
-        # ----------------------------------------------------
-        # JSON must be an object.
-        # ----------------------------------------------------
+        if not isinstance(data, dict):
+            return {
+                "content": apply_vars(
+                    message,
+                    member=member,
+                    guild=guild,
+                    bot=self.bot,
+                    invite=invite
+                )
+            }
 
-        if not isinstance(
+        data = apply_vars_dict(
             data,
-            dict
-        ):
-            return None
-
-        # ----------------------------------------------------
-        # Replace variables recursively.
-        # ----------------------------------------------------
-
-        data = self.apply_vars_dict(
             member,
-            data,
+            guild,
+            self.bot,
             invite
         )
 
-        # ----------------------------------------------------
-        # Build Discord message.
-        # ----------------------------------------------------
+        result = {}
 
-        try:
+        if "content" in data:
+            result["content"] = data["content"]
 
-            result = {}
+        if "embeds" in data:
+            embeds = []
 
-            # =================================================
-            # Content
-            # =================================================
-
-            if "content" in data:
-
-                content = data["content"]
-
-                if content is not None:
-
-                    if not isinstance(
-                        content,
-                        str
-                    ):
-                        return None
-
-                    result["content"] = content
-
-            # =================================================
-            # Full Discord JSON:
-            #
-            # "embeds": [...]
-            # =================================================
-
-            if "embeds" in data:
-
-                embeds_data = data["embeds"]
-
-                if not isinstance(
-                    embeds_data,
-                    list
-                ):
-                    return None
-
-                embeds = []
-
-                for embed_data in embeds_data:
-
-                    if not isinstance(
-                        embed_data,
-                        dict
-                    ):
-                        return None
-
-                    embed = discord.Embed.from_dict(
-                        embed_data
-                    )
-
-                    embeds.append(embed)
-
-                result["embeds"] = embeds
-
-            # =================================================
-            # Wrapped format:
-            #
-            # "embed": {...}
-            # =================================================
-
-            elif "embed" in data:
-
-                embed_data = data["embed"]
-
-                if not isinstance(
-                    embed_data,
-                    dict
-                ):
-                    return None
-
-                embed = discord.Embed.from_dict(
-                    embed_data
+            for embed_data in data["embeds"]:
+                embeds.append(
+                    discord.Embed.from_dict(embed_data)
                 )
 
-                result["embed"] = embed
+            result["embeds"] = embeds
 
-            # =================================================
-            # Direct Embed JSON:
-            #
-            # {
-            #   "title": "...",
-            #   "description": "..."
-            # }
-            #
-            # Do not treat arbitrary Discord message keys
-            # as embed keys.
-            # =================================================
+        elif "embed" in data:
+            result["embed"] = discord.Embed.from_dict(
+                data["embed"]
+            )
 
-            elif any(
-                key in data
-                for key in (
-                    "title",
-                    "description",
-                    "fields",
-                    "color",
-                    "footer",
-                    "author",
-                    "thumbnail",
-                    "image",
-                    "timestamp",
-                    "url"
+        elif any(
+            key in data
+            for key in (
+                "title",
+                "description",
+                "color",
+                "fields",
+                "footer",
+                "author",
+                "thumbnail",
+                "image"
+            )
+        ):
+            result["embed"] = discord.Embed.from_dict(
+                data
+            )
+
+        if "allowed_mentions" in data:
+            result["allowed_mentions"] = (
+                discord.AllowedMentions.from_dict(
+                    data["allowed_mentions"]
                 )
+            )
+
+        return result
+
+    async def populate_invite_cache(self):
+        await self.bot.wait_until_ready()
+
+        for guild in self.bot.guilds:
+            try:
+                invites = await guild.invites()
+
+                self.invite_cache[guild.id] = {
+                    invite.code: invite.uses or 0
+                    for invite in invites
+                }
+
+            except (
+                discord.Forbidden,
+                discord.HTTPException
             ):
+                self.invite_cache[guild.id] = {}
 
-                embed = discord.Embed.from_dict(
-                    data
-                )
+    async def update_invite_cache(self, guild):
+        try:
+            invites = await guild.invites()
 
-                result["embed"] = embed
-
-            # =================================================
-            # Components
-            #
-            # Your JSON may contain:
-            #
-            # "components": []
-            #
-            # Welcomer currently does not build interactive
-            # Discord components from arbitrary JSON.
-            #
-            # Empty components are therefore ignored.
-            # =================================================
-
-            if "components" in data:
-
-                components = data["components"]
-
-                if (
-                    components
-                    and not isinstance(
-                        components,
-                        list
-                    )
-                ):
-                    return None
-
-                # Currently intentionally ignored.
-
-            # ------------------------------------------------
-            # Nothing usable.
-            # ------------------------------------------------
-
-            if not result:
-                return None
-
-            return result
+            self.invite_cache[guild.id] = {
+                invite.code: invite.uses or 0
+                for invite in invites
+            }
 
         except (
-            ValueError,
-            TypeError,
-            KeyError
+            discord.Forbidden,
+            discord.HTTPException
         ):
-            return None
+            self.invite_cache[guild.id] = {}
 
-    # Configuration Command
-    
+    def default_invite(self, guild_id):
+        invites = self.invite_cache.get(
+            guild_id,
+            {}
+        )
+
+        if not invites:
+            return ""
+
+        return next(
+            iter(invites.keys()),
+            ""
+        )
+
     @commands.guild_only()
-    @commands.has_permissions(
-        manage_guild=True
-    )
+    @commands.has_permissions(manage_guild=True)
     @commands.command()
     async def welcomer(
         self,
         ctx,
-        channel: discord.TextChannel
+        channel: discord.TextChannel = None
     ):
-        """
-        Configure the Welcomer.
+        if channel is None:
+            config = await self.get_config(
+                ctx.guild.id
+            )
 
-        Usage:
-            <prefix>welcomer #channel
+            channel_id = config.get("channel_id")
 
-        The actual prefix is automatically taken from
-        Modmail's configured command prefix.
-        """
+            if channel_id:
+                channel = ctx.guild.get_channel(
+                    channel_id
+                )
+
+            if channel is None:
+                channel = ctx.channel
 
         config = await self.get_config(
             ctx.guild.id
         )
 
-        # Configuration Embed
-        
+        config["channel_id"] = channel.id
+
+        await self.save_config(
+            ctx.guild.id,
+            config
+        )
+
         embed = discord.Embed(
             title="Welcomer Configuration",
+            description=(
+                f"Welcome channel: {channel.mention}\n\n"
+                "Choose how you want to configure the "
+                "welcome message.\n\n"
+                "💬 **Message**\n"
+                "Create a normal text welcome message.\n\n"
+                "📝 **Embed JSON**\n"
+                "Paste a Discord message JSON payload.\n\n"
+                "🧪 **Test**\n"
+                "Send the current configuration as a test.\n\n"
+                "⛔ **Disable**\n"
+                "Disable automatic welcome messages.\n\n"
+                "✅ **Enable**\n"
+                "Enable automatic welcome messages."
+            ),
             color=discord.Color.blurple()
-        )
-
-        embed.description = (
-            f"Configure the welcome message for "
-            f"{channel.mention}.\n\n"
-            "Choose how you want your welcome message "
-            "to be configured."
-        )
-
-        # Existing Configuration
-        
-        if config:
-
-            enabled = config.get(
-                "enabled",
-                True
-            )
-
-            message_type = config.get(
-                "type",
-                "unknown"
-            )
-
-            status = (
-                "Enabled"
-                if enabled
-                else "Disabled"
-            )
-
-            configured_channel_id = config.get(
-                "channel"
-            )
-
-            configured_channel = (
-                self.bot.get_channel(
-                    int(configured_channel_id)
-                )
-                if configured_channel_id
-                and str(configured_channel_id).isdigit()
-                else None
-            )
-
-            configured_channel_text = (
-                configured_channel.mention
-                if configured_channel
-                else f"<#{configured_channel_id}>"
-                if configured_channel_id
-                else "Unknown"
-            )
-
-            embed.add_field(
-                name="Current Configuration",
-                value=(
-                    f"**Channel:** "
-                    f"{configured_channel_text}\n"
-                    f"**Type:** `{message_type}`\n"
-                    f"**Status:** `{status}`"
-                ),
-                inline=False
-            )
-
-        else:
-
-            embed.add_field(
-                name="Current Configuration",
-                value=(
-                    "No Welcomer has been configured yet."
-                ),
-                inline=False
-            )
-
-        # Message Information
-        
-        embed.add_field(
-            name="Message",
-            value=(
-                "Configure a normal text welcome message."
-            ),
-            inline=False
-        )
-
-        # Embed Information
-        
-        embed.add_field(
-            name="Embed JSON",
-            value=(
-                "Configure a Discord embed using JSON.\n"
-                "You can also use Discord's full JSON format "
-                "with `embeds` and `content`."
-            ),
-            inline=False
-        )
-
-        # Variables
-        
-        embed.add_field(
-            name="Variables",
-            value=(
-                "`{member.mention}`\n"
-                "`{member.name}`\n"
-                "`{guild.name}`\n"
-                "`{invite}`"
-            ),
-            inline=False
-        )
-
-        # View
-        
-        view = WelcomerView(
-            cog=self,
-            author_id=ctx.author.id,
-            guild_id=ctx.guild.id,
-            channel=channel,
-            config=config
         )
 
         await ctx.send(
             embed=embed,
-            view=view
+            view=WelcomerView(
+                self,
+                ctx.guild.id,
+                channel
+            )
         )
 
-    # Member Join
-    
     @commands.Cog.listener()
-    async def on_member_join(
-        self,
-        member
-    ):
-        """
-        Send the configured welcome message when
-        a new member joins.
-        """
-
+    async def on_member_join(self, member):
         config = await self.get_config(
             member.guild.id
         )
 
-        # No configuration.
-        
-        if not config:
+        if not config.get("enabled"):
             return
 
-        # Disabled.
-        
-        if not config.get(
-            "enabled",
-            True
-        ):
-            return
-
-        # Channel.
-        
-        channel_id = config.get(
-            "channel"
-        )
+        channel_id = config.get("channel_id")
 
         if not channel_id:
             return
 
-        try:
-
-            channel = member.guild.get_channel(
-                int(channel_id)
-            )
-
-        except (
-            TypeError,
-            ValueError
-        ):
-            return
-
-        if not channel:
-            return
-
-        # Get used invite.
-
-        invite = await self.get_used_invite(
-            member.guild
+        channel = member.guild.get_channel(
+            int(channel_id)
         )
 
-        # Message.
-        
-        message = config.get(
-            "message"
-        )
+        if channel is None:
+            return
+
+        message = config.get("message")
 
         if not message:
             return
 
-        # Format.
-        
-        formatted = self.format_message(
-            member,
-            message,
-            invite
+        invite = self.default_invite(
+            member.guild.id
         )
 
-        if formatted is None:
-
-            print(
-                "Welcomer: Invalid saved configuration "
-                f"for guild {member.guild.id}"
-            )
-
-            return
-
-        # Send.
-        
         try:
+            payload = self.format_message(
+                member,
+                message,
+                invite
+            )
 
             await channel.send(
-                **formatted
+                **payload
             )
 
-        except discord.Forbidden:
+        except discord.HTTPException:
+            return
 
-            print(
-                "Welcomer: Missing permissions in "
-                f"{channel} ({channel.id})"
-            )
+        except Exception:
+            return
 
-        except discord.HTTPException as exc:
+        await self.update_invite_cache(
+            member.guild
+        )
 
-            print(
-                "Welcomer: Discord error: "
-                f"{exc}"
-            )
-
-
-# Modmail Plugin Entry Point
 
 async def setup(bot):
     await bot.add_cog(
