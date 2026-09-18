@@ -301,7 +301,7 @@ class Welcomer(commands.Cog):
         self.bot = bot
 
         # Modmail plugin database
-        self.db = bot.plugin_db.get_partition(self)
+        self.db = bot.api.get_plugin_partition(self)
 
         # Guild ID -> invite set
         self.invite_cache = {}
