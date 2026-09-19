@@ -179,8 +179,7 @@ class WelcomerView(discord.ui.View):
 
     @discord.ui.button(
         label="Message",
-        style=discord.ButtonStyle.primary,
-        emoji="💬"
+        style=discord.ButtonStyle.primary
     )
     async def message_button(
         self,
@@ -196,8 +195,7 @@ class WelcomerView(discord.ui.View):
 
     @discord.ui.button(
         label="Embed JSON",
-        style=discord.ButtonStyle.primary,
-        emoji="📝"
+        style=discord.ButtonStyle.primary
     )
     async def embed_button(
         self,
@@ -213,8 +211,7 @@ class WelcomerView(discord.ui.View):
 
     @discord.ui.button(
         label="Test",
-        style=discord.ButtonStyle.success,
-        emoji="🧪"
+        style=discord.ButtonStyle.success
     )
     async def test_button(
         self,
@@ -261,8 +258,7 @@ class WelcomerView(discord.ui.View):
 
     @discord.ui.button(
         label="Disable",
-        style=discord.ButtonStyle.danger,
-        emoji="⛔"
+        style=discord.ButtonStyle.danger
     )
     async def disable_button(
         self,
@@ -285,8 +281,7 @@ class WelcomerView(discord.ui.View):
 
     @discord.ui.button(
         label="Enable",
-        style=discord.ButtonStyle.secondary,
-        emoji="✅"
+        style=discord.ButtonStyle.secondary
     )
     async def enable_button(
         self,
