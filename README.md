@@ -1,1 +1,3 @@
 # Modmail-Plugins
+- Welcomer
+- CloseRequest
