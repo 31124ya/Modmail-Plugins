@@ -1,5 +1,7 @@
+import asyncio
+import copy
 import json
-import logging
+import string
 
 import discord
 from discord.ext import commands
@@ -9,135 +11,150 @@ from core import checks
 from core.models import PermissionLevel
 
 
-log = logging.getLogger(__name__)
-
 COMPONENTS_V2_FLAG = 1 << 15
 
+CLOSE_REQUEST_CLOSE_ID = "close_request_close"
+CLOSE_REQUEST_KEEP_ID = "close_request_keep"
 
-DEFAULT_CLOSE_REQUEST = {
-    "flags": COMPONENTS_V2_FLAG,
-    "components": [
-        {
-            "type": 10,
-            "content": "## Close your ticket\n\nWould you like to close your support ticket?"
-        },
-        {
-            "type": 1,
-            "components": [
-                {
-                    "type": 2,
-                    "style": 4,
-                    "label": "Close Ticket",
-                    "custom_id": "close_request_close"
-                },
-                {
-                    "type": 2,
-                    "style": 2,
-                    "label": "Keep Open",
-                    "custom_id": "close_request_keep"
-                }
-            ]
-        }
-    ]
+
+DEFAULT_CONFIG = {
+    "close_request": {
+        "flags": COMPONENTS_V2_FLAG,
+        "components": [
+            {
+                "type": 10,
+                "content": "Would you like to close your support ticket?"
+            },
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 4,
+                        "label": "Close Ticket",
+                        "custom_id": CLOSE_REQUEST_CLOSE_ID
+                    },
+                    {
+                        "type": 2,
+                        "style": 2,
+                        "label": "Keep Open",
+                        "custom_id": CLOSE_REQUEST_KEEP_ID
+                    }
+                ]
+            }
+        ]
+    },
+
+    "inactivity": {
+        "flags": COMPONENTS_V2_FLAG,
+        "components": [
+            {
+                "type": 10,
+                "content": "Close Scheduled"
+            }
+        ]
+    },
+
+    "closed_message": {
+        "flags": COMPONENTS_V2_FLAG,
+        "components": [
+            {
+                "type": 10,
+                "content": "Ticket Closed"
+            }
+        ]
+    },
+
+    "keep_open_message": {
+        "flags": COMPONENTS_V2_FLAG,
+        "components": [
+            {
+                "type": 10,
+                "content": "The ticket will remain open."
+            }
+        ]
+    },
+
+    "inactivity_close_message": {
+        "flags": COMPONENTS_V2_FLAG,
+        "components": [
+            {
+                "type": 10,
+                "content": "This ticket has been closed."
+            }
+        ]
+    },
+
+    "schedule_closed": {
+        "flags": COMPONENTS_V2_FLAG,
+        "components": [
+            {
+                "type": 10,
+                "content": "Close Scheduled"
+            }
+        ]
+    }
 }
 
 
-DEFAULT_INACTIVITY = {
-    "flags": COMPONENTS_V2_FLAG,
-    "components": [
-        {
-            "type": 10,
-            "content": "## Inactivity Notice\n\nThis ticket has been scheduled to close in 24 hours due to inactivity.\n\nIf you still need help, simply reply to this ticket."
-        }
-    ]
-}
+class SafeFormatter(string.Formatter):
+    def get_value(self, key, args, kwargs):
+        if isinstance(key, str):
+            return kwargs.get(key, "{" + key + "}")
+
+        return super().get_value(key, args, kwargs)
 
 
-DEFAULT_CLOSED = {
-    "flags": COMPONENTS_V2_FLAG,
-    "components": [
-        {
-            "type": 10,
-            "content": "Your ticket has been closed."
-        }
-    ]
-}
-
-
-DEFAULT_KEEP_OPEN = {
-    "flags": COMPONENTS_V2_FLAG,
-    "components": [
-        {
-            "type": 10,
-            "content": "No problem. Your ticket will remain open."
-        }
-    ]
-}
-
-
-DEFAULT_INACTIVITY_CLOSE = {
-    "flags": COMPONENTS_V2_FLAG,
-    "components": [
-        {
-            "type": 10,
-            "content": "This ticket has been automatically closed after 24 hours of inactivity."
-        }
-    ]
-}
-
-
-class ComponentsModal(discord.ui.Modal):
-    def __init__(self, cog, guild_id, setting_name, title):
-        super().__init__(title=title)
+class CloseRequestModal(discord.ui.Modal):
+    def __init__(
+        self,
+        cog,
+        guild_id,
+        config_key,
+        current
+    ):
+        super().__init__(
+            title=f"Edit {config_key.replace('_', ' ').title()}"
+        )
 
         self.cog = cog
         self.guild_id = guild_id
-        self.setting_name = setting_name
-
-        config = cog.config_cache.get(guild_id, {})
-        current = config.get(setting_name)
-
-        if current:
-            value = json.dumps(
-                current,
-                ensure_ascii=False,
-                indent=2
-            )
-        else:
-            value = json.dumps(
-                cog.default_config(setting_name),
-                ensure_ascii=False,
-                indent=2
-            )
+        self.config_key = config_key
 
         self.json_input = discord.ui.TextInput(
             label="Components V2 JSON",
             style=discord.TextStyle.paragraph,
-            placeholder='{"flags":32768,"components":[...]}',
-            default=value[:4000],
             required=True,
-            max_length=4000
+            max_length=4000,
+            default=json.dumps(
+                current,
+                ensure_ascii=False,
+                indent=2
+            )
         )
 
         self.add_item(self.json_input)
 
     async def on_submit(self, interaction):
-        raw = str(self.json_input.value)
+        raw = self.json_input.value
 
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             await interaction.response.send_message(
-                f"Invalid JSON:\n{exc}",
+                f"❌ Invalid JSON:\n```text\n{exc}\n```",
                 ephemeral=True
             )
             return
 
-        try:
-            self.cog.validate_components_v2(data)
-        except ValueError as exc:
+        error = self.cog.validate_components(
+            self.config_key,
+            data
+        )
+
+        if error:
             await interaction.response.send_message(
-                str(exc),
+                f"❌ {error}",
                 ephemeral=True
             )
             return
@@ -146,7 +163,7 @@ class ComponentsModal(discord.ui.Modal):
             self.guild_id
         )
 
-        config[self.setting_name] = data
+        config[self.config_key] = data
 
         await self.cog.save_config(
             self.guild_id,
@@ -154,17 +171,56 @@ class ComponentsModal(discord.ui.Modal):
         )
 
         await interaction.response.send_message(
-            "Components V2 configuration saved.",
+            f"✅ `{self.config_key}` has been saved.",
             ephemeral=True
         )
 
 
 class ConfigurationView(discord.ui.View):
-    def __init__(self, cog, guild_id):
+    def __init__(
+        self,
+        cog,
+        author_id,
+        guild_id
+    ):
         super().__init__(timeout=300)
 
         self.cog = cog
+        self.author_id = author_id
         self.guild_id = guild_id
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ You cannot use this configuration panel.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    async def open_editor(
+        self,
+        interaction,
+        key
+    ):
+        config = await self.cog.get_config(
+            self.guild_id
+        )
+
+        current = config.get(
+            key,
+            DEFAULT_CONFIG[key]
+        )
+
+        await interaction.response.send_modal(
+            CloseRequestModal(
+                self.cog,
+                self.guild_id,
+                key,
+                current
+            )
+        )
 
     @discord.ui.button(
         label="Close Request",
@@ -176,13 +232,9 @@ class ConfigurationView(discord.ui.View):
         interaction,
         button
     ):
-        await interaction.response.send_modal(
-            ComponentsModal(
-                self.cog,
-                self.guild_id,
-                "close_request",
-                "Close Request Components"
-            )
+        await self.open_editor(
+            interaction,
+            "close_request"
         )
 
     @discord.ui.button(
@@ -195,13 +247,9 @@ class ConfigurationView(discord.ui.View):
         interaction,
         button
     ):
-        await interaction.response.send_modal(
-            ComponentsModal(
-                self.cog,
-                self.guild_id,
-                "inactivity",
-                "Inactivity Components"
-            )
+        await self.open_editor(
+            interaction,
+            "inactivity"
         )
 
     @discord.ui.button(
@@ -214,13 +262,9 @@ class ConfigurationView(discord.ui.View):
         interaction,
         button
     ):
-        await interaction.response.send_modal(
-            ComponentsModal(
-                self.cog,
-                self.guild_id,
-                "closed_message",
-                "Closed Message Components"
-            )
+        await self.open_editor(
+            interaction,
+            "closed_message"
         )
 
     @discord.ui.button(
@@ -233,13 +277,9 @@ class ConfigurationView(discord.ui.View):
         interaction,
         button
     ):
-        await interaction.response.send_modal(
-            ComponentsModal(
-                self.cog,
-                self.guild_id,
-                "keep_open_message",
-                "Keep Open Components"
-            )
+        await self.open_editor(
+            interaction,
+            "keep_open_message"
         )
 
     @discord.ui.button(
@@ -252,240 +292,240 @@ class ConfigurationView(discord.ui.View):
         interaction,
         button
     ):
-        await interaction.response.send_modal(
-            ComponentsModal(
-                self.cog,
-                self.guild_id,
-                "inactivity_close_message",
-                "Inactivity Close Components"
-            )
+        await self.open_editor(
+            interaction,
+            "inactivity_close_message"
         )
 
-
-class CloseRequestView(discord.ui.View):
-    def __init__(
-        self,
-        bot,
-        thread_id,
-        user_id
-    ):
-        super().__init__(timeout=None)
-
-        self.bot = bot
-        self.thread_id = thread_id
-        self.user_id = user_id
-
     @discord.ui.button(
-        label="Close Ticket",
-        style=discord.ButtonStyle.danger,
-        custom_id="close_request_close"
+        label="Schedule Closed",
+        style=discord.ButtonStyle.success,
+        row=2
     )
-    async def close_button(
+    async def schedule_closed_button(
         self,
         interaction,
         button
     ):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "This button is not for you.",
-                ephemeral=True
-            )
-            return
-
-        thread = await self.bot.threads.find(
-            recipient_id=self.user_id
-        )
-
-        if thread is None:
-            await interaction.response.send_message(
-                "This ticket is no longer open.",
-                ephemeral=True
-            )
-            return
-
-        if thread.id != self.thread_id:
-            await interaction.response.send_message(
-                "This button belongs to another ticket.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.defer()
-
-        await thread.close(
-            closer=interaction.user
-        )
-
-    @discord.ui.button(
-        label="Keep Open",
-        style=discord.ButtonStyle.secondary,
-        custom_id="close_request_keep"
-    )
-    async def keep_open_button(
-        self,
-        interaction,
-        button
-    ):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "This button is not for you.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            "Your ticket will remain open.",
-            ephemeral=True
+        await self.open_editor(
+            interaction,
+            "schedule_closed"
         )
 
 
 class CloseRequest(commands.Cog):
     def __init__(self, bot: ModmailBot):
         self.bot = bot
+        self.db = bot.plugin_db.get_partition(self)
 
-        self.db = bot.plugin_db.get_partition(
-            self
-        )
-
-        self.config_cache = {}
+        self.inactivity_tasks = {}
 
     async def get_config(self, guild_id):
-        if guild_id in self.config_cache:
-            return self.config_cache[guild_id]
-
         data = await self.db.find_one(
             {"_id": str(guild_id)}
         )
 
+        config = copy.deepcopy(DEFAULT_CONFIG)
+
         if data:
-            data.pop("_id", None)
-        else:
-            data = {
-                "close_request": DEFAULT_CLOSE_REQUEST,
-                "inactivity": DEFAULT_INACTIVITY,
-                "closed_message": DEFAULT_CLOSED,
-                "keep_open_message": DEFAULT_KEEP_OPEN,
-                "inactivity_close_message": DEFAULT_INACTIVITY_CLOSE
-            }
+            saved = data.get("config", {})
 
-        self.config_cache[guild_id] = data
+            for key, value in saved.items():
+                if key in config:
+                    config[key] = value
 
-        return data
+        return config
 
     async def save_config(
         self,
         guild_id,
         config
     ):
-        self.config_cache[guild_id] = config
-
-        data = dict(config)
-        data["_id"] = str(guild_id)
-
-        await self.db.replace_one(
+        await self.db.update_one(
             {"_id": str(guild_id)},
-            data,
+            {
+                "$set": {
+                    "config": config
+                }
+            },
             upsert=True
         )
 
-    def default_config(self, name):
-        defaults = {
-            "close_request": DEFAULT_CLOSE_REQUEST,
-            "inactivity": DEFAULT_INACTIVITY,
-            "closed_message": DEFAULT_CLOSED,
-            "keep_open_message": DEFAULT_KEEP_OPEN,
-            "inactivity_close_message": DEFAULT_INACTIVITY_CLOSE
-        }
-
-        return defaults[name]
-
-    def validate_components_v2(self, data):
+    def validate_components(
+        self,
+        key,
+        data
+    ):
         if not isinstance(data, dict):
-            raise ValueError(
-                "The JSON root must be an object."
-            )
+            return "The JSON root must be an object."
 
-        if data.get("flags") != COMPONENTS_V2_FLAG:
-            raise ValueError(
-                f"Components V2 messages must use flags {COMPONENTS_V2_FLAG}."
+        flags = data.get("flags", 0)
+
+        if not isinstance(flags, int):
+            return "`flags` must be an integer."
+
+        if not flags & COMPONENTS_V2_FLAG:
+            return (
+                "This message must use Components V2. "
+                f"Add `\"flags\": {COMPONENTS_V2_FLAG}`."
             )
 
         components = data.get("components")
 
         if not isinstance(components, list):
-            raise ValueError(
-                '"components" must be an array.'
-            )
+            return "`components` must be an array."
 
-        if not components:
-            raise ValueError(
-                '"components" cannot be empty.'
-            )
+        if key == "close_request":
+            found_close = False
+            found_keep = False
 
-        for component in components:
-            if not isinstance(component, dict):
-                raise ValueError(
-                    "Every component must be an object."
+            def scan(items):
+                nonlocal found_close
+                nonlocal found_keep
+
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+
+                    if item.get("type") == 2:
+                        custom_id = item.get("custom_id")
+
+                        if custom_id == CLOSE_REQUEST_CLOSE_ID:
+                            found_close = True
+
+                        if custom_id == CLOSE_REQUEST_KEEP_ID:
+                            found_keep = True
+
+                    children = item.get("components")
+
+                    if isinstance(children, list):
+                        scan(children)
+
+            scan(components)
+
+            if not found_close:
+                return (
+                    "Close Request must contain a button with "
+                    f"`custom_id` = `{CLOSE_REQUEST_CLOSE_ID}`."
                 )
 
-            if "type" not in component:
-                raise ValueError(
-                    "Every component must contain a type."
+            if not found_keep:
+                return (
+                    "Close Request must contain a button with "
+                    f"`custom_id` = `{CLOSE_REQUEST_KEEP_ID}`."
                 )
 
-    async def send_components_v2(
+        return None
+
+    def apply_variables(
+        self,
+        value,
+        member=None,
+        guild=None
+    ):
+        if isinstance(value, str):
+            formatter = SafeFormatter()
+
+            values = {
+                "member": member,
+                "user": member,
+                "guild": guild,
+                "bot": self.bot
+            }
+
+            try:
+                return formatter.vformat(
+                    value,
+                    (),
+                    values
+                )
+            except Exception:
+                return value
+
+        if isinstance(value, list):
+            return [
+                self.apply_variables(
+                    item,
+                    member,
+                    guild
+                )
+                for item in value
+            ]
+
+        if isinstance(value, dict):
+            return {
+                key: self.apply_variables(
+                    item,
+                    member,
+                    guild
+                )
+                for key, item in value.items()
+            }
+
+        return value
+
+    def prepare_close_request(
+        self,
+        data,
+        guild_id,
+        thread_id,
+        user_id
+    ):
+        data = copy.deepcopy(data)
+
+        close_id = (
+            f"cr:close:{guild_id}:"
+            f"{thread_id}:{user_id}"
+        )
+
+        keep_id = (
+            f"cr:keep:{guild_id}:"
+            f"{thread_id}:{user_id}"
+        )
+
+        def replace(items):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+
+                if item.get("type") == 2:
+                    custom_id = item.get("custom_id")
+
+                    if custom_id == CLOSE_REQUEST_CLOSE_ID:
+                        item["custom_id"] = close_id
+
+                    elif custom_id == CLOSE_REQUEST_KEEP_ID:
+                        item["custom_id"] = keep_id
+
+                children = item.get("components")
+
+                if isinstance(children, list):
+                    replace(children)
+
+        replace(data.get("components", []))
+
+        return data
+
+    async def send_components(
         self,
         channel,
         data,
-        view=None
+        member=None,
+        guild=None
     ):
-        payload = dict(data)
+        payload = copy.deepcopy(data)
 
-        payload["flags"] = COMPONENTS_V2_FLAG
-
-        components = payload.get(
-            "components",
-            []
+        payload = self.apply_variables(
+            payload,
+            member,
+            guild
         )
 
-        if view is not None:
-            has_close_button = False
-            has_keep_button = False
-
-            for component in components:
-                if component.get("type") != 1:
-                    continue
-
-                for child in component.get(
-                    "components",
-                    []
-                ):
-                    custom_id = child.get(
-                        "custom_id"
-                    )
-
-                    if custom_id == "close_request_close":
-                        has_close_button = True
-
-                    if custom_id == "close_request_keep":
-                        has_keep_button = True
-
-            if has_close_button or has_keep_button:
-                return await self.send_raw_message(
-                    channel,
-                    payload
-                )
-
-        return await self.send_raw_message(
-            channel,
-            payload
+        payload["flags"] = (
+            payload.get("flags", 0)
+            | COMPONENTS_V2_FLAG
         )
 
-    async def send_raw_message(
-        self,
-        channel,
-        payload
-    ):
         route = discord.http.Route(
             "POST",
             "/channels/{channel_id}/messages",
@@ -497,39 +537,114 @@ class CloseRequest(commands.Cog):
             json=payload
         )
 
+    async def send_to_both(
+        self,
+        thread,
+        data
+    ):
+        member = thread.recipient
+        guild = thread.guild
+
+        payload = copy.deepcopy(data)
+
+        payload = self.apply_variables(
+            payload,
+            member,
+            guild
+        )
+
+        payload["flags"] = (
+            payload.get("flags", 0)
+            | COMPONENTS_V2_FLAG
+        )
+
+        await self.send_components(
+            member,
+            payload,
+            member,
+            guild
+        )
+
+        await self.send_components(
+            thread.channel,
+            payload,
+            member,
+            guild
+        )
+
+    async def show_config(
+        self,
+        ctx
+    ):
+        config = await self.get_config(
+            ctx.guild.id
+        )
+
+        embed = discord.Embed(
+            title="CloseRequest Configuration",
+            description=(
+                "Configure every Components V2 message used "
+                "by CloseRequest.\n\n"
+                "**All messages except `Schedule Closed` are "
+                "shown identically to the user and Staff.**\n\n"
+                "`Schedule Closed` is Staff-only."
+            ),
+            color=discord.Color.blurple()
+        )
+
+        for key, label in (
+            ("close_request", "Close Request"),
+            ("inactivity", "Inactivity"),
+            ("closed_message", "Closed Message"),
+            ("keep_open_message", "Keep Open Message"),
+            ("inactivity_close_message", "Inactivity Close"),
+            ("schedule_closed", "Schedule Closed")
+        ):
+            data = config.get(
+                key,
+                DEFAULT_CONFIG[key]
+            )
+
+            component_count = len(
+                data.get("components", [])
+            )
+
+            embed.add_field(
+                name=label,
+                value=(
+                    f"Components: `{component_count}`\n"
+                    f"V2: `Yes`"
+                ),
+                inline=True
+            )
+
+        await ctx.send(
+            embed=embed,
+            view=ConfigurationView(
+                self,
+                ctx.author.id,
+                ctx.guild.id
+            )
+        )
+
     @commands.command(
         name="closerequest"
     )
     @checks.has_permissions(
         PermissionLevel.SUPPORTER
     )
-    @checks.thread_only()
-    async def close_request(
+    async def closerequest(
         self,
         ctx,
         action=None
     ):
-        if action is not None:
-            if action.lower() in (
-                "config",
-                "setup",
-                "settings"
-            ):
-                await self.show_config(
-                    ctx
-                )
-                return
-
-        thread = ctx.thread
-
-        if thread is None:
+        if action and action.lower() == "config":
+            await self.show_config(ctx)
             return
 
-        user = thread.recipient
-
-        if user is None:
+        if not ctx.thread:
             await ctx.send(
-                "I could not find the user associated with this ticket."
+                "This command can only be used inside a Modmail thread."
             )
             return
 
@@ -537,30 +652,17 @@ class CloseRequest(commands.Cog):
             ctx.guild.id
         )
 
-        data = config.get(
-            "close_request",
-            DEFAULT_CLOSE_REQUEST
+        data = self.prepare_close_request(
+            config["close_request"],
+            ctx.guild.id,
+            ctx.thread.id,
+            ctx.thread.recipient.id
         )
 
-        try:
-            await self.send_raw_message(
-                await user.create_dm(),
-                data
-            )
-
-            await ctx.send(
-                "The close request has been sent to the ticket owner."
-            )
-
-        except discord.HTTPException as exc:
-            log.exception(
-                "Failed to send close request: %s",
-                exc
-            )
-
-            await ctx.send(
-                "I could not send the close request."
-            )
+        await self.send_to_both(
+            ctx.thread,
+            data
+        )
 
     @commands.command(
         name="inactivity"
@@ -568,96 +670,267 @@ class CloseRequest(commands.Cog):
     @checks.has_permissions(
         PermissionLevel.SUPPORTER
     )
-    @checks.thread_only()
     async def inactivity(
         self,
-        ctx
+        ctx,
+        action=None
     ):
+        if action and action.lower() == "config":
+            await self.show_config(ctx)
+            return
+
+        if not ctx.thread:
+            await ctx.send(
+                "This command can only be used inside a Modmail thread."
+            )
+            return
+
         thread = ctx.thread
 
-        if thread is None:
-            return
+        old_task = self.inactivity_tasks.get(
+            thread.id
+        )
 
-        user = thread.recipient
-
-        if user is None:
-            await ctx.send(
-                "I could not find the user associated with this ticket."
-            )
-            return
-
-        if thread.close_task is not None:
-            await ctx.send(
-                "This ticket already has an inactivity timer running."
-            )
-            return
+        if old_task and not old_task.done():
+            old_task.cancel()
 
         config = await self.get_config(
             ctx.guild.id
         )
 
-        data = config.get(
-            "inactivity",
-            DEFAULT_INACTIVITY
+        # This message is identical on both sides.
+        await self.send_to_both(
+            thread,
+            config["inactivity"]
         )
 
-        try:
-            await self.send_raw_message(
-                await user.create_dm(),
-                data
-            )
-        except discord.HTTPException as exc:
-            log.exception(
-                "Failed to send inactivity message: %s",
-                exc
-            )
-
-            await ctx.send(
-                "I could not send the inactivity message."
-            )
-
-            return
-
-        await thread.close(
-            closer=ctx.author,
-            after=24 * 60 * 60,
-            message=None
+        # This message is Staff-only.
+        await self.send_components(
+            thread.channel,
+            config["schedule_closed"],
+            thread.recipient,
+            thread.guild
         )
 
-        await ctx.send(
-            "The 24-hour inactivity timer has started."
-        )
-
-    async def show_config(self, ctx):
-        embed = discord.Embed(
-            title="CloseRequest Configuration",
-            description=(
-                "Use the buttons below to configure the "
-                "Components V2 messages.\n\n"
-                "**Close Request**\n"
-                "Message sent by `closerequest`.\n\n"
-                "**Inactivity**\n"
-                "Message sent when `inactivity` starts.\n\n"
-                "**Closed Message**\n"
-                "Message used when the user closes the ticket.\n\n"
-                "**Keep Open Message**\n"
-                "Message shown when the user chooses to keep it open.\n\n"
-                "**Inactivity Close**\n"
-                "Message used when the inactivity timer expires."
-            ),
-            color=discord.Color.blurple()
-        )
-
-        await ctx.send(
-            embed=embed,
-            view=ConfigurationView(
-                self,
+        task = asyncio.create_task(
+            self.inactivity_worker(
+                thread,
                 ctx.guild.id
             )
         )
 
+        self.inactivity_tasks[
+            thread.id
+        ] = task
 
-async def setup(bot: ModmailBot):
-    cog = CloseRequest(bot)
+    async def inactivity_worker(
+        self,
+        thread,
+        guild_id
+    ):
+        try:
+            await asyncio.sleep(
+                24 * 60 * 60
+            )
 
-    await bot.add_cog(cog)
+            current = self.inactivity_tasks.get(
+                thread.id
+            )
+
+            if current is not asyncio.current_task():
+                return
+
+            config = await self.get_config(
+                guild_id
+            )
+
+            # Same message on both sides.
+            await self.send_to_both(
+                thread,
+                config["inactivity_close_message"]
+            )
+
+            await thread.close(
+                closer=self.bot.user
+            )
+
+        except asyncio.CancelledError:
+            return
+
+        except Exception as exc:
+            print(
+                "CloseRequest inactivity error:",
+                repr(exc)
+            )
+
+        finally:
+            current = self.inactivity_tasks.get(
+                thread.id
+            )
+
+            if current is asyncio.current_task():
+                self.inactivity_tasks.pop(
+                    thread.id,
+                    None
+                )
+
+    @commands.Cog.listener()
+    async def on_thread_reply(
+        self,
+        thread,
+        from_mod,
+        message,
+        anonymous,
+        plain
+    ):
+        task = self.inactivity_tasks.get(
+            thread.id
+        )
+
+        if not task or task.done():
+            return
+
+        # Any real reply cancels this particular
+        # inactivity countdown.
+        task.cancel()
+
+        self.inactivity_tasks.pop(
+            thread.id,
+            None
+        )
+
+    @commands.Cog.listener()
+    async def on_interaction(
+        self,
+        interaction
+    ):
+        if interaction.type != discord.InteractionType.component:
+            return
+
+        data = interaction.data or {}
+
+        custom_id = data.get(
+            "custom_id"
+        )
+
+        if not custom_id:
+            return
+
+        parts = custom_id.split(":")
+
+        if len(parts) != 5:
+            return
+
+        if parts[0] != "cr":
+            return
+
+        action = parts[1]
+
+        try:
+            guild_id = int(parts[2])
+            thread_id = int(parts[3])
+            user_id = int(parts[4])
+        except ValueError:
+            return
+
+        if action not in ("close", "keep"):
+            return
+
+        if interaction.user.id != user_id:
+            await interaction.response.send_message(
+                "This button belongs to another ticket.",
+                ephemeral=True
+            )
+            return
+
+        guild = self.bot.get_guild(
+            guild_id
+        )
+
+        if not guild:
+            await interaction.response.send_message(
+                "The server for this ticket could not be found.",
+                ephemeral=True
+            )
+            return
+
+        thread = guild.get_channel(
+            thread_id
+        )
+
+        if not thread:
+            await interaction.response.send_message(
+                "This ticket is no longer open.",
+                ephemeral=True
+            )
+            return
+
+        config = await self.get_config(
+            guild_id
+        )
+
+        if action == "keep":
+            await self.send_components(
+                interaction.user,
+                config["keep_open_message"],
+                interaction.user,
+                guild
+            )
+
+            await self.send_components(
+                thread,
+                config["keep_open_message"],
+                interaction.user,
+                guild
+            )
+
+            await interaction.response.send_message(
+                "The ticket will remain open.",
+                ephemeral=True
+            )
+
+            return
+
+        task = self.inactivity_tasks.pop(
+            thread.id,
+            None
+        )
+
+        if task and not task.done():
+            task.cancel()
+
+        await self.send_components(
+            interaction.user,
+            config["closed_message"],
+            interaction.user,
+            guild
+        )
+
+        await self.send_components(
+            thread,
+            config["closed_message"],
+            interaction.user,
+            guild
+        )
+
+        await interaction.response.send_message(
+            "Ticket closed.",
+            ephemeral=True
+        )
+
+        await thread.close(
+            closer=interaction.user
+        )
+
+    async def cog_unload(self):
+        for task in self.inactivity_tasks.values():
+            if not task.done():
+                task.cancel()
+
+        self.inactivity_tasks.clear()
+
+
+async def setup(bot: ModmailBot) -> None:
+    await bot.add_cog(
+        CloseRequest(bot)
+    )
