@@ -52,30 +52,12 @@ DEFAULT_CONFIG = {
             }
         ]
     },
-    "closed_message": {
-        "flags": COMPONENTS_V2_FLAG,
-        "components": [
-            {
-                "type": 10,
-                "content": "Ticket Closed"
-            }
-        ]
-    },
     "keep_open_message": {
         "flags": COMPONENTS_V2_FLAG,
         "components": [
             {
                 "type": 10,
                 "content": "The ticket will remain open."
-            }
-        ]
-    },
-    "inactivity_close_message": {
-        "flags": COMPONENTS_V2_FLAG,
-        "components": [
-            {
-                "type": 10,
-                "content": "This ticket has been closed after 24 hours."
             }
         ]
     },
@@ -247,22 +229,6 @@ class ConfigurationView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Closed Message",
-        style=discord.ButtonStyle.primary,
-        row=1
-    )
-    async def closed_message_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await self.open_editor(
-            interaction,
-            "closed_message",
-            "Edit Closed Message"
-        )
-
-    @discord.ui.button(
         label="Keep Open Message",
         style=discord.ButtonStyle.primary,
         row=1
@@ -276,22 +242,6 @@ class ConfigurationView(discord.ui.View):
             interaction,
             "keep_open_message",
             "Edit Keep Open Message"
-        )
-
-    @discord.ui.button(
-        label="Inactivity Close",
-        style=discord.ButtonStyle.primary,
-        row=2
-    )
-    async def inactivity_close_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await self.open_editor(
-            interaction,
-            "inactivity_close_message",
-            "Edit Inactivity Close Message"
         )
 
     @discord.ui.button(
@@ -613,16 +563,9 @@ class CloseRequest(commands.Cog):
         try:
             await asyncio.sleep(24 * 60 * 60)
 
-            config = await self.get_config()
-
-            try:
-                await thread.close(
-                    closer=self.bot.user
-                )
-            except TypeError:
-                await thread.close(
-                    closer=self.bot.user
-                )
+        await thread.close(
+            closer=self.bot.user
+        )
 
         except asyncio.CancelledError:
             return
@@ -738,35 +681,21 @@ class CloseRequest(commands.Cog):
         member = interaction.user
 
         if action == "close":
-            await interaction.response.defer()
+    await interaction.response.defer()
 
-            close_message = config["closed_message"]
+    task = self.inactivity_tasks.pop(
+        thread_id,
+        None
+    )
 
-            await self.send_to_user_and_thread(
-                thread,
-                close_message,
-                member
-            )
+    if task and not task.done():
+        task.cancel()
 
-            task = self.inactivity_tasks.pop(
-                thread_id,
-                None
-            )
+    await thread.close(
+        closer=interaction.user
+    )
 
-            if task and not task.done():
-                task.cancel()
-
-            try:
-                await thread.close(
-                    closer=interaction.user,
-                    message=None
-                )
-            except TypeError:
-                await thread.close(
-                    closer=interaction.user
-                )
-
-            return
+    return
 
         if action == "keep":
             await interaction.response.defer()
