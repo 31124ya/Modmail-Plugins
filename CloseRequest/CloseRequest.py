@@ -11,10 +11,16 @@ from core import checks
 from core.models import PermissionLevel
 
 
-COMPONENTS_V2_FLAG = 1 << 15
+COMPONENTS_V2_FLAG = 32768
+
+PANEL_CLOSE_REQUEST_ID = "p_349505739154264113"
+PANEL_INACTIVITY_ID = "p_349512223644717060"
+PANEL_STAY_OPEN_ID = "p_349513851269550152"
+PANEL_SCHEDULE_CLOSED_ID = "p_349522760269041665"
 
 CLOSE_REQUEST_CLOSE_ID = "close_request_close"
 CLOSE_REQUEST_KEEP_ID = "close_request_keep"
+
 
 DEFAULT_CONFIG = {
     "close_request": {
@@ -73,6 +79,72 @@ DEFAULT_CONFIG = {
 }
 
 
+PANEL_CONFIG = {
+    "flags": COMPONENTS_V2_FLAG,
+    "components": [
+        {
+            "type": 17,
+            "accent_color": 9988428,
+            "components": [
+                {
+                    "type": 10,
+                    "content": (
+                        "**CloseRequest Configuration**\n"
+                        "CloseRequest\n"
+                        "-# `?closerequest`\n\n"
+                        "Inactivity\n"
+                        "-# `?inactivity`\n\n"
+                        "Stay Open\n"
+                        "-# CloseRequest Cancelled\n\n"
+                        "Inactivity Schedule\n"
+                        "-# Inactivity Schedule cancel\n\n"
+                        "-# Created by <@1208637596465369193>"
+                    )
+                },
+                {
+                    "type": 14,
+                    "spacing": 2
+                },
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "style": 2,
+                            "type": 2,
+                            "label": "CloseRequest",
+                            "custom_id": PANEL_CLOSE_REQUEST_ID
+                        },
+                        {
+                            "style": 2,
+                            "type": 2,
+                            "label": "Inactivity",
+                            "custom_id": PANEL_INACTIVITY_ID
+                        }
+                    ]
+                },
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "style": 2,
+                            "type": 2,
+                            "label": "Stay Open",
+                            "custom_id": PANEL_STAY_OPEN_ID
+                        },
+                        {
+                            "style": 2,
+                            "type": 2,
+                            "label": "Schedule Closed",
+                            "custom_id": PANEL_SCHEDULE_CLOSED_ID
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
+
+
 class SafeFormatter(string.Formatter):
     def get_value(self, key, args, kwargs):
         try:
@@ -100,19 +172,39 @@ def apply_variables(value, member=None, guild=None, channel=None):
         return value
 
 
-def apply_variables_dict(data, member=None, guild=None, channel=None):
+def apply_variables_dict(
+    data,
+    member=None,
+    guild=None,
+    channel=None
+):
     if isinstance(data, str):
-        return apply_variables(data, member, guild, channel)
+        return apply_variables(
+            data,
+            member,
+            guild,
+            channel
+        )
 
     if isinstance(data, list):
         return [
-            apply_variables_dict(item, member, guild, channel)
+            apply_variables_dict(
+                item,
+                member,
+                guild,
+                channel
+            )
             for item in data
         ]
 
     if isinstance(data, dict):
         return {
-            key: apply_variables_dict(value, member, guild, channel)
+            key: apply_variables_dict(
+                value,
+                member,
+                guild,
+                channel
+            )
             for key, value in data.items()
         }
 
@@ -120,8 +212,14 @@ def apply_variables_dict(data, member=None, guild=None, channel=None):
 
 
 class CloseRequestModal(discord.ui.Modal):
-    def __init__(self, cog, config_key, title):
+    def __init__(
+        self,
+        cog,
+        config_key,
+        title
+    ):
         super().__init__(title=title)
+
         self.cog = cog
         self.config_key = config_key
 
@@ -129,13 +227,15 @@ class CloseRequestModal(discord.ui.Modal):
             label="Components V2 JSON",
             style=discord.TextStyle.paragraph,
             required=True,
-            max_length=4000,
-            default=""
+            max_length=4000
         )
 
         self.add_item(self.json_input)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
         raw = self.json_input.value.strip()
 
         try:
@@ -156,108 +256,14 @@ class CloseRequestModal(discord.ui.Modal):
             )
             return
 
-        await self.cog.save_config(self.config_key, data)
+        await self.cog.save_config(
+            self.config_key,
+            data
+        )
 
         await interaction.response.send_message(
             "Saved successfully.",
             ephemeral=True
-        )
-
-
-class ConfigurationView(discord.ui.View):
-    def __init__(self, cog):
-        super().__init__(timeout=300)
-        self.cog = cog
-
-    async def open_editor(
-        self,
-        interaction: discord.Interaction,
-        config_key: str,
-        title: str
-    ):
-        config = await self.cog.get_config()
-
-        data = config.get(
-            config_key,
-            DEFAULT_CONFIG[config_key]
-        )
-
-        modal = CloseRequestModal(
-            self.cog,
-            config_key,
-            title
-        )
-
-        modal.json_input.default = json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2
-        )
-
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(
-        label="Close Request",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def close_request_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await self.open_editor(
-            interaction,
-            "close_request",
-            "Edit Close Request"
-        )
-
-    @discord.ui.button(
-        label="Inactivity",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def inactivity_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await self.open_editor(
-            interaction,
-            "inactivity",
-            "Edit Inactivity"
-        )
-
-    @discord.ui.button(
-        label="Keep Open Message",
-        style=discord.ButtonStyle.primary,
-        row=1
-    )
-    async def keep_open_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await self.open_editor(
-            interaction,
-            "keep_open_message",
-            "Edit Keep Open Message"
-        )
-
-    @discord.ui.button(
-        label="Schedule Closed",
-        style=discord.ButtonStyle.secondary,
-        row=2
-    )
-    async def schedule_closed_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await self.open_editor(
-            interaction,
-            "schedule_closed",
-            "Edit Schedule Closed"
         )
 
 
@@ -269,7 +275,9 @@ class CloseRequest(commands.Cog):
     async def get_config(self):
         partition = self.bot.plugin_db.get_partition(self)
 
-        config = await partition.find_one({"_id": "config"})
+        config = await partition.find_one(
+            {"_id": "config"}
+        )
 
         if not config:
             config = {
@@ -283,9 +291,26 @@ class CloseRequest(commands.Cog):
                 upsert=True
             )
 
-        return config.get("data", copy.deepcopy(DEFAULT_CONFIG))
+            return config["data"]
 
-    async def save_config(self, key, value):
+        stored = config.get(
+            "data",
+            {}
+        )
+
+        result = copy.deepcopy(DEFAULT_CONFIG)
+
+        for key, value in stored.items():
+            if key in result:
+                result[key] = value
+
+        return result
+
+    async def save_config(
+        self,
+        key,
+        value
+    ):
         partition = self.bot.plugin_db.get_partition(self)
 
         config = await self.get_config()
@@ -319,29 +344,19 @@ class CloseRequest(commands.Cog):
         if not components:
             return False, "`components` cannot be empty."
 
-        if "content" in data:
-            return False, (
-                "Components V2 messages cannot use the legacy "
-                "`content` field."
-            )
+        forbidden = (
+            "content",
+            "embeds",
+            "poll",
+            "stickers"
+        )
 
-        if "embeds" in data:
-            return False, (
-                "Components V2 messages cannot use the legacy "
-                "`embeds` field."
-            )
-
-        if "poll" in data:
-            return False, (
-                "Components V2 messages cannot use the legacy "
-                "`poll` field."
-            )
-
-        if "stickers" in data:
-            return False, (
-                "Components V2 messages cannot use the legacy "
-                "`stickers` field."
-            )
+        for field in forbidden:
+            if field in data:
+                return False, (
+                    f"Components V2 cannot use `{field}` "
+                    "at the top level."
+                )
 
         return True, None
 
@@ -360,27 +375,38 @@ class CloseRequest(commands.Cog):
                     process(item)
 
             elif isinstance(value, dict):
-                if value.get("type") == 2:
-                    custom_id = value.get("custom_id")
+                custom_id = value.get("custom_id")
 
-                    if custom_id == CLOSE_REQUEST_CLOSE_ID:
-                        value["custom_id"] = (
-                            f"cr:close:{guild_id}:{thread_id}:{user_id}"
-                        )
+                if custom_id == CLOSE_REQUEST_CLOSE_ID:
+                    value["custom_id"] = (
+                        f"cr:close:"
+                        f"{guild_id}:"
+                        f"{thread_id}:"
+                        f"{user_id}"
+                    )
 
-                    elif custom_id == CLOSE_REQUEST_KEEP_ID:
-                        value["custom_id"] = (
-                            f"cr:keep:{guild_id}:{thread_id}:{user_id}"
-                        )
+                elif custom_id == CLOSE_REQUEST_KEEP_ID:
+                    value["custom_id"] = (
+                        f"cr:keep:"
+                        f"{guild_id}:"
+                        f"{thread_id}:"
+                        f"{user_id}"
+                    )
 
                 for child in value.values():
                     process(child)
 
-        process(data.get("components", []))
+        process(
+            data.get("components", [])
+        )
 
         return data
 
-    async def send_components(self, channel, data):
+    async def send_components(
+        self,
+        channel,
+        data
+    ):
         payload = copy.deepcopy(data)
 
         route = discord.http.Route(
@@ -400,7 +426,11 @@ class CloseRequest(commands.Cog):
         data,
         member
     ):
-        guild = getattr(thread.channel, "guild", None)
+        guild = getattr(
+            thread.channel,
+            "guild",
+            None
+        )
 
         data = apply_variables_dict(
             data,
@@ -426,11 +456,19 @@ class CloseRequest(commands.Cog):
         thread,
         data
     ):
-        guild = getattr(thread.channel, "guild", None)
+        guild = getattr(
+            thread.channel,
+            "guild",
+            None
+        )
 
         data = apply_variables_dict(
             data,
-            member=getattr(thread, "recipient", None),
+            member=getattr(
+                thread,
+                "recipient",
+                None
+            ),
             guild=guild,
             channel=thread.channel
         )
@@ -440,50 +478,97 @@ class CloseRequest(commands.Cog):
             data
         )
 
-    async def show_config(self, ctx):
-        embed = discord.Embed(
-            title="CloseRequest Configuration",
-            description=(
-                "Configure the six Components V2 messages used by "
-                "CloseRequest.\n\n"
-                "**Close Request**\n"
-                "Message sent when `?closerequest` is used.\n\n"
-                "**Inactivity**\n"
-                "Message sent when `?inactivity` is used.\n\n"
-                "**Closed Message**\n"
-                "Message used after the user presses **Close Ticket**.\n\n"
-                "**Keep Open Message**\n"
-                "Message used after the user presses **Keep Open**.\n\n"
-                "**Inactivity Close**\n"
-                "Message used when the 24-hour timer expires.\n\n"
-                "**Schedule Closed**\n"
-                "Staff-only message sent when `?inactivity` starts."
-            ),
-            color=discord.Color.blurple()
+    async def show_config(
+        self,
+        ctx
+    ):
+        await self.send_components(
+            ctx.channel,
+            PANEL_CONFIG
         )
 
-        await ctx.send(
-            embed=embed,
-            view=ConfigurationView(self)
+    async def open_config_modal(
+        self,
+        interaction,
+        config_key,
+        title
+    ):
+        config = await self.get_config()
+
+        current = config.get(
+            config_key,
+            DEFAULT_CONFIG[config_key]
         )
+
+        modal = CloseRequestModal(
+            self,
+            config_key,
+            title
+        )
+
+        modal.json_input.default = json.dumps(
+            current,
+            ensure_ascii=False,
+            indent=2
+        )
+
+        await interaction.response.send_modal(
+            modal
+        )
+
+    async def get_thread_from_interaction(
+        self,
+        interaction,
+        guild_id,
+        thread_id
+    ):
+        guild = self.bot.get_guild(
+            guild_id
+        )
+
+        if guild is None:
+            return None
+
+        channel = guild.get_channel(
+            thread_id
+        )
+
+        if channel is None:
+            return None
+
+        try:
+            return await self.bot.threads.find(
+                channel
+            )
+        except Exception:
+            return None
 
     @commands.command(
         name="closeconfig",
         help="Configure CloseRequest Components V2 messages."
     )
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def close_config(self, ctx):
+    @checks.has_permissions(
+        PermissionLevel.ADMINISTRATOR
+    )
+    async def close_config(
+        self,
+        ctx
+    ):
         await self.show_config(ctx)
 
     @commands.command(
         name="closerequest",
         help="Send a close request to the ticket opener."
     )
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_permissions(
+        PermissionLevel.SUPPORTER
+    )
     @checks.thread_only()
-    async def close_request(self, ctx):
+    async def close_request(
+        self,
+        ctx
+    ):
         thread = ctx.thread
-
         member = thread.recipient
 
         config = await self.get_config()
@@ -516,14 +601,21 @@ class CloseRequest(commands.Cog):
         name="inactivity",
         help="Schedule this ticket to close after 24 hours."
     )
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_permissions(
+        PermissionLevel.SUPPORTER
+    )
     @checks.thread_only()
-    async def inactivity(self, ctx):
+    async def inactivity(
+        self,
+        ctx
+    ):
         thread = ctx.thread
 
         thread_id = thread.channel.id
 
-        old_task = self.inactivity_tasks.get(thread_id)
+        old_task = self.inactivity_tasks.get(
+            thread_id
+        )
 
         if old_task and not old_task.done():
             old_task.cancel()
@@ -555,26 +647,32 @@ class CloseRequest(commands.Cog):
             self._inactivity_timer(thread)
         )
 
-        self.inactivity_tasks[thread_id] = task
+        self.inactivity_tasks[
+            thread_id
+        ] = task
 
-    async def _inactivity_timer(self, thread):
+    async def _inactivity_timer(
+        self,
+        thread
+    ):
         thread_id = thread.channel.id
 
         try:
-            await asyncio.sleep(24 * 60 * 60)
+            await asyncio.sleep(
+                24 * 60 * 60
+            )
 
-        await thread.close(
-            closer=self.bot.user
-        )
+            await thread.close(
+                closer=self.bot.user
+            )
 
         except asyncio.CancelledError:
             return
 
-        except Exception:
-            raise
-
         finally:
-            current = self.inactivity_tasks.get(thread_id)
+            current = self.inactivity_tasks.get(
+                thread_id
+            )
 
             if current is asyncio.current_task():
                 self.inactivity_tasks.pop(
@@ -593,7 +691,9 @@ class CloseRequest(commands.Cog):
     ):
         thread_id = thread.channel.id
 
-        task = self.inactivity_tasks.get(thread_id)
+        task = self.inactivity_tasks.get(
+            thread_id
+        )
 
         if task and not task.done():
             task.cancel()
@@ -611,9 +711,45 @@ class CloseRequest(commands.Cog):
         if interaction.type != discord.InteractionType.component:
             return
 
-        custom_id = interaction.data.get("custom_id")
+        data = interaction.data or {}
+
+        custom_id = data.get(
+            "custom_id"
+        )
 
         if not custom_id:
+            return
+
+        if custom_id == PANEL_CLOSE_REQUEST_ID:
+            await self.open_config_modal(
+                interaction,
+                "close_request",
+                "Edit CloseRequest"
+            )
+            return
+
+        if custom_id == PANEL_INACTIVITY_ID:
+            await self.open_config_modal(
+                interaction,
+                "inactivity",
+                "Edit Inactivity"
+            )
+            return
+
+        if custom_id == PANEL_STAY_OPEN_ID:
+            await self.open_config_modal(
+                interaction,
+                "keep_open_message",
+                "Edit Stay Open"
+            )
+            return
+
+        if custom_id == PANEL_SCHEDULE_CLOSED_ID:
+            await self.open_config_modal(
+                interaction,
+                "schedule_closed",
+                "Edit Schedule Closed"
+            )
             return
 
         parts = custom_id.split(":")
@@ -626,7 +762,10 @@ class CloseRequest(commands.Cog):
 
         action = parts[1]
 
-        if action not in ("close", "keep"):
+        if action not in (
+            "close",
+            "keep"
+        ):
             return
 
         try:
@@ -643,31 +782,11 @@ class CloseRequest(commands.Cog):
             )
             return
 
-        guild = self.bot.get_guild(guild_id)
-
-        if guild is None:
-            await interaction.response.send_message(
-                "The server could not be found.",
-                ephemeral=True
-            )
-            return
-
-        channel = guild.get_channel(thread_id)
-
-        if channel is None:
-            await interaction.response.send_message(
-                "The ticket could not be found.",
-                ephemeral=True
-            )
-            return
-
-        thread = getattr(channel, "thread", None)
-
-        if thread is None:
-            try:
-                thread = await self.bot.threads.find(channel)
-            except Exception:
-                thread = None
+        thread = await self.get_thread_from_interaction(
+            interaction,
+            guild_id,
+            thread_id
+        )
 
         if thread is None:
             await interaction.response.send_message(
@@ -676,42 +795,44 @@ class CloseRequest(commands.Cog):
             )
             return
 
-        config = await self.get_config()
-
-        member = interaction.user
-
         if action == "close":
-    await interaction.response.defer()
+            await interaction.response.defer()
 
-    task = self.inactivity_tasks.pop(
-        thread_id,
-        None
-    )
+            task = self.inactivity_tasks.pop(
+                thread_id,
+                None
+            )
 
-    if task and not task.done():
-        task.cancel()
+            if task and not task.done():
+                task.cancel()
 
-    await thread.close(
-        closer=interaction.user
-    )
+            await thread.close(
+                closer=interaction.user
+            )
 
-    return
+            return
 
         if action == "keep":
             await interaction.response.defer()
 
-            keep_open_message = config[
-                "keep_open_message"
-            ]
+            config = await self.get_config()
+
+            keep_open_message = copy.deepcopy(
+                config["keep_open_message"]
+            )
 
             await self.send_to_user_and_thread(
                 thread,
                 keep_open_message,
-                member
+                interaction.user
             )
 
+            return
 
-async def setup(bot: ModmailBot) -> None:
+
+async def setup(
+    bot: ModmailBot
+) -> None:
     await bot.add_cog(
         CloseRequest(bot)
     )
