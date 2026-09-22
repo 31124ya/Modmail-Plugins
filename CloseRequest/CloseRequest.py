@@ -97,7 +97,7 @@ PANEL_CONFIG = {
                         "Stay Open\n"
                         "-# CloseRequest Cancelled\n\n"
                         "Inactivity Schedule\n"
-                        "-# Inactivity Schedule cancel\n\n"
+                        "-# Inactivity Schedule Cancel\n\n"
                         "-# Created by <@1208637596465369193>"
                     )
                 },
