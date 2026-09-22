@@ -615,22 +615,9 @@ class CloseRequest(commands.Cog):
 
             config = await self.get_config()
 
-            close_message = config[
-                "inactivity_close_message"
-            ]
-
-            member = thread.recipient
-
-            await self.send_to_user_and_thread(
-                thread,
-                close_message,
-                member
-            )
-
             try:
                 await thread.close(
-                    closer=self.bot.user,
-                    message=None
+                    closer=self.bot.user
                 )
             except TypeError:
                 await thread.close(
