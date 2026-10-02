@@ -13,6 +13,7 @@ from core.models import PermissionLevel
 class AnnouncementPanel(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=300)
+
         self.cog = cog
         self.channel = None
 
@@ -48,12 +49,11 @@ class AnnouncementPanel(discord.ui.View):
 
     async def channel_selected(self, interaction: discord.Interaction):
         self.channel = self.channel_select.values[0]
+
         self.create_button.disabled = False
 
-        embed = self.build_embed()
-
         await interaction.response.edit_message(
-            embed=embed,
+            embed=self.build_embed(),
             view=self,
         )
 
@@ -131,7 +131,7 @@ class Announcement(commands.Cog):
             description=(
                 "Create a new embed announcement.\n\n"
                 "Select the destination channel below, "
-                "then continue to the announcement editor."
+                "then click **Create Announcement**."
             ),
             color=self.bot.main_color,
         )
@@ -148,122 +148,122 @@ class Announcement(commands.Cog):
         )
 
     async def show_modal(self, interaction, channel_id):
-    custom_id = f"{self.MODAL_PREFIX}:{interaction.user.id}:{channel_id}"
+        custom_id = f"{self.MODAL_PREFIX}:{interaction.user.id}:{channel_id}"
 
-    components = [
-        {
-            "type": 18,
-            "label": "Title",
-            "description": "Optional",
-            "component": {
-                "type": 4,
-                "custom_id": "announcement_title",
-                "style": 1,
-                "max_length": 256,
-                "required": False,
-                "placeholder": "Announcement title",
+        components = [
+            {
+                "type": 18,
+                "label": "Title",
+                "description": "Optional",
+                "component": {
+                    "type": 4,
+                    "custom_id": "announcement_title",
+                    "style": 1,
+                    "max_length": 256,
+                    "required": False,
+                    "placeholder": "Announcement title",
+                },
             },
-        },
-        {
-            "type": 18,
-            "label": "Description",
-            "description": "Required",
-            "component": {
-                "type": 4,
-                "custom_id": "announcement_description",
-                "style": 2,
-                "min_length": 1,
-                "max_length": 4000,
-                "required": True,
-                "placeholder": "Write your announcement...",
+            {
+                "type": 18,
+                "label": "Description",
+                "description": "Required",
+                "component": {
+                    "type": 4,
+                    "custom_id": "announcement_description",
+                    "style": 2,
+                    "min_length": 1,
+                    "max_length": 4000,
+                    "required": True,
+                    "placeholder": "Write your announcement...",
+                },
             },
-        },
-        {
-            "type": 18,
-            "label": "Footer",
-            "description": "Optional",
-            "component": {
-                "type": 4,
-                "custom_id": "announcement_footer",
-                "style": 1,
-                "max_length": 2048,
-                "required": False,
-                "placeholder": "Optional footer",
+            {
+                "type": 18,
+                "label": "Footer",
+                "description": "Optional",
+                "component": {
+                    "type": 4,
+                    "custom_id": "announcement_footer",
+                    "style": 1,
+                    "max_length": 2048,
+                    "required": False,
+                    "placeholder": "Optional footer",
+                },
             },
-        },
-        {
-            "type": 18,
-            "label": "Image",
-            "description": "Optional image",
-            "component": {
-                "type": 19,
-                "custom_id": "announcement_image",
-                "min_values": 0,
-                "max_values": 1,
-                "required": False,
-                "file_types": {
-                    "values": [
-                        "image/png",
-                        "image/jpeg",
-                        "image/webp",
-                        "image/gif"
-                    ]
-                }
+            {
+                "type": 18,
+                "label": "Image",
+                "description": "Optional image",
+                "component": {
+                    "type": 19,
+                    "custom_id": "announcement_image",
+                    "min_values": 0,
+                    "max_values": 1,
+                    "required": False,
+                    "file_types": {
+                        "values": [
+                            "image/png",
+                            "image/jpeg",
+                            "image/webp",
+                            "image/gif",
+                        ]
+                    },
+                },
             },
-        },
-        {
-            "type": 18,
-            "label": "Thumbnail",
-            "description": "Optional thumbnail",
-            "component": {
-                "type": 19,
-                "custom_id": "announcement_thumbnail",
-                "min_values": 0,
-                "max_values": 1,
-                "required": False,
-                "file_types": {
-                    "values": [
-                        "image/png",
-                        "image/jpeg",
-                        "image/webp",
-                        "image/gif"
-                    ]
-                }
+            {
+                "type": 18,
+                "label": "Thumbnail",
+                "description": "Optional thumbnail",
+                "component": {
+                    "type": 19,
+                    "custom_id": "announcement_thumbnail",
+                    "min_values": 0,
+                    "max_values": 1,
+                    "required": False,
+                    "file_types": {
+                        "values": [
+                            "image/png",
+                            "image/jpeg",
+                            "image/webp",
+                            "image/gif",
+                        ]
+                    },
+                },
+            },
+        ]
+
+        payload = {
+            "type": 9,
+            "data": {
+                "custom_id": custom_id,
+                "title": "Create Announcement",
+                "components": components,
             },
         }
-    ]
 
-    payload = {
-        "type": 9,
-        "data": {
-            "custom_id": custom_id,
-            "title": "Create Announcement",
-            "components": components
-        }
-    }
+        url = (
+            f"https://discord.com/api/v10/interactions/"
+            f"{interaction.id}/{interaction.token}/callback"
+        )
 
-    url = (
-        f"https://discord.com/api/v10/interactions/"
-        f"{interaction.id}/{interaction.token}/callback"
-    )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
+                    if response.status >= 300:
+                        error = await response.text()
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as response:
+                        print(
+                            f"[Announcement] Failed to open modal "
+                            f"({response.status}): {error}"
+                        )
 
-                if response.status >= 300:
-                    error = await response.text()
-                    print(
-                        f"[Announcement] Failed to open modal "
-                        f"({response.status}): {error}"
-                    )
-
-    except Exception as exc:
-        print(f"[Announcement] Failed to open modal: {exc}")
+        except Exception as exc:
+            print(f"[Announcement] Failed to open modal: {exc}")
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
@@ -297,9 +297,20 @@ class Announcement(commands.Cog):
 
         values = self.parse_modal_values(data)
 
-        description = values.get("announcement_description", "").strip()
-        title = values.get("announcement_title", "").strip()
-        footer = values.get("announcement_footer", "").strip()
+        title = values.get(
+            "announcement_title",
+            "",
+        ).strip()
+
+        description = values.get(
+            "announcement_description",
+            "",
+        ).strip()
+
+        footer = values.get(
+            "announcement_footer",
+            "",
+        ).strip()
 
         if not description:
             await self.send_interaction_message(
@@ -322,8 +333,15 @@ class Announcement(commands.Cog):
                 )
                 return
 
-        image = self.get_attachment(data, "announcement_image")
-        thumbnail = self.get_attachment(data, "announcement_thumbnail")
+        image = self.get_attachment(
+            data,
+            "announcement_image",
+        )
+
+        thumbnail = self.get_attachment(
+            data,
+            "announcement_thumbnail",
+        )
 
         embed = discord.Embed(
             description=description,
@@ -334,7 +352,9 @@ class Announcement(commands.Cog):
             embed.title = title
 
         if footer:
-            embed.set_footer(text=footer)
+            embed.set_footer(
+                text=footer,
+            )
 
         files = []
 
@@ -350,7 +370,7 @@ class Announcement(commands.Cog):
                 )
 
                 embed.set_image(
-                    url=f"attachment://{image_file['filename']}"
+                    url=f"attachment://{image_file['filename']}",
                 )
 
         if thumbnail:
@@ -365,7 +385,7 @@ class Announcement(commands.Cog):
                 )
 
                 embed.set_thumbnail(
-                    url=f"attachment://{thumbnail_file['filename']}"
+                    url=f"attachment://{thumbnail_file['filename']}",
                 )
 
         try:
@@ -374,6 +394,7 @@ class Announcement(commands.Cog):
                 files=files,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+
         except discord.Forbidden:
             await self.send_interaction_message(
                 interaction,
@@ -401,7 +422,10 @@ class Announcement(commands.Cog):
 
         for component in data.get("components", []):
             if component.get("type") == 18:
-                inner = component.get("component", {})
+                inner = component.get(
+                    "component",
+                    {},
+                )
 
                 custom_id = inner.get("custom_id")
 
@@ -409,38 +433,65 @@ class Announcement(commands.Cog):
                     continue
 
                 if inner.get("type") == 4:
-                    values[custom_id] = inner.get("value", "")
+                    values[custom_id] = inner.get(
+                        "value",
+                        "",
+                    )
 
                 elif inner.get("type") == 19:
-                    values[custom_id] = inner.get("values", [])
+                    values[custom_id] = inner.get(
+                        "values",
+                        [],
+                    )
 
             elif component.get("type") == 1:
-                for inner in component.get("components", []):
+                for inner in component.get(
+                    "components",
+                    [],
+                ):
                     custom_id = inner.get("custom_id")
 
                     if not custom_id:
                         continue
 
                     if inner.get("type") == 4:
-                        values[custom_id] = inner.get("value", "")
+                        values[custom_id] = inner.get(
+                            "value",
+                            "",
+                        )
 
                     elif inner.get("type") == 19:
-                        values[custom_id] = inner.get("values", [])
+                        values[custom_id] = inner.get(
+                            "values",
+                            [],
+                        )
 
         return values
 
     def get_attachment(self, data, custom_id):
-        values = self.parse_modal_values(data).get(custom_id, [])
+        values = self.parse_modal_values(data).get(
+            custom_id,
+            [],
+        )
 
         if not values:
             return None
 
         attachment_id = str(values[0])
 
-        resolved = data.get("resolved", {})
-        attachments = resolved.get("attachments", {})
+        resolved = data.get(
+            "resolved",
+            {},
+        )
 
-        return attachments.get(attachment_id)
+        attachments = resolved.get(
+            "attachments",
+            {},
+        )
+
+        return attachments.get(
+            attachment_id,
+        )
 
     async def download_attachment(self, attachment):
         url = attachment.get("url")
@@ -448,7 +499,10 @@ class Announcement(commands.Cog):
         if not url:
             return None
 
-        filename = attachment.get("filename", "image")
+        filename = attachment.get(
+            "filename",
+            "image",
+        )
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -482,19 +536,19 @@ class Announcement(commands.Cog):
             },
         }
 
-        route = discord.http.Route(
-            "POST",
-            "/interactions/{interaction_id}/{interaction_token}/callback",
-            interaction_id=interaction.id,
-            interaction_token=interaction.token,
+        url = (
+            f"https://discord.com/api/v10/interactions/"
+            f"{interaction.id}/{interaction.token}/callback"
         )
 
         try:
-            await self.bot.http.request(
-                route,
-                json=payload,
-            )
-        except discord.HTTPException:
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+        except Exception:
             pass
 
 
