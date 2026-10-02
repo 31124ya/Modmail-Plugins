@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 
 import discord
@@ -159,12 +160,30 @@ class AnnouncementModal(discord.ui.Modal):
         description = self.description_input.value.strip()
         footer = self.footer_input.value.strip()
 
-        await self.cog.handle_modal_submit(
-            interaction,
-            self.channel_id,
-            title,
-            description,
-            footer,
+        self.cog.pending[interaction.user.id] = {
+            "channel_id": self.channel_id,
+            "title": title,
+            "description": description,
+            "footer": footer,
+        }
+
+        await interaction.response.send_message(
+            (
+                "Announcement prepared.\n\n"
+                "**Optional images**\n"
+                "Send up to **2 image attachments** in this channel.\n\n"
+                "• 1 image → Image\n"
+                "• 2 images → First = Image, Second = Thumbnail\n"
+                "• No image → send `skip`\n\n"
+                "You have **60 seconds**."
+            ),
+            ephemeral=True,
+        )
+
+        asyncio.create_task(
+            self.cog.wait_for_images(
+                interaction,
+            )
         )
 
 
@@ -211,66 +230,6 @@ class Announcement(commands.Cog):
 
         await interaction.response.send_modal(modal)
 
-    async def handle_modal_submit(
-        self,
-        interaction: discord.Interaction,
-        channel_id: int,
-        title: str,
-        description: str,
-        footer: str,
-    ):
-        channel = self.bot.get_channel(channel_id)
-
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(
-                    channel_id,
-                )
-            except discord.HTTPException:
-                await interaction.response.send_message(
-                    "I couldn't find that channel.",
-                    ephemeral=True,
-                )
-                return
-
-        if not isinstance(
-            channel,
-            (
-                discord.TextChannel,
-                discord.NewsChannel,
-            ),
-        ):
-            await interaction.response.send_message(
-                "That channel cannot receive announcements.",
-                ephemeral=True,
-            )
-            return
-
-        self.pending[interaction.user.id] = {
-            "channel_id": channel.id,
-            "title": title,
-            "description": description,
-            "footer": footer,
-        }
-
-        await interaction.response.send_message(
-            (
-                "Your announcement has been prepared.\n\n"
-                "**Images are optional.**\n"
-                "Send up to **2 image attachments** in this "
-                "channel within 60 seconds.\n\n"
-                "• 1 image → Image\n"
-                "• 2 images → First = Image, Second = Thumbnail\n"
-                "• No image → send `skip`\n\n"
-                "The announcement will be sent automatically."
-            ),
-            ephemeral=True,
-        )
-
-        await self.wait_for_images(
-            interaction,
-        )
-
     async def wait_for_images(
         self,
         interaction: discord.Interaction,
@@ -290,8 +249,10 @@ class Announcement(commands.Cog):
             image_attachments = [
                 attachment
                 for attachment in message.attachments
-                if attachment.content_type
-                and attachment.content_type.startswith("image/")
+                if (
+                    attachment.content_type
+                    and attachment.content_type.startswith("image/")
+                )
             ]
 
             return len(image_attachments) > 0
@@ -303,7 +264,7 @@ class Announcement(commands.Cog):
                 timeout=60,
             )
 
-        except TimeoutError:
+        except asyncio.TimeoutError:
             self.pending.pop(
                 user_id,
                 None,
@@ -337,8 +298,10 @@ class Announcement(commands.Cog):
             attachments = [
                 attachment
                 for attachment in message.attachments
-                if attachment.content_type
-                and attachment.content_type.startswith("image/")
+                if (
+                    attachment.content_type
+                    and attachment.content_type.startswith("image/")
+                )
             ]
 
             attachments = attachments[:2]
@@ -347,7 +310,6 @@ class Announcement(commands.Cog):
             interaction,
             config,
             attachments,
-            message,
         )
 
     async def send_announcement(
@@ -355,7 +317,6 @@ class Announcement(commands.Cog):
         interaction: discord.Interaction,
         config,
         attachments,
-        source_message,
     ):
         channel = self.bot.get_channel(
             config["channel_id"],
@@ -372,6 +333,13 @@ class Announcement(commands.Cog):
                     ephemeral=True,
                 )
                 return
+
+        if not hasattr(channel, "send"):
+            await interaction.followup.send(
+                "That channel cannot receive announcements.",
+                ephemeral=True,
+            )
+            return
 
         embed = discord.Embed(
             description=config["description"],
