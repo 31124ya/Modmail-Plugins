@@ -148,113 +148,122 @@ class Announcement(commands.Cog):
         )
 
     async def show_modal(self, interaction, channel_id):
-        custom_id = f"{self.MODAL_PREFIX}:{interaction.user.id}:{channel_id}"
+    custom_id = f"{self.MODAL_PREFIX}:{interaction.user.id}:{channel_id}"
 
-        components = [
-            {
-                "type": 18,
-                "label": "Title",
-                "description": "Optional",
-                "component": {
-                    "type": 4,
-                    "custom_id": "announcement_title",
-                    "style": 1,
-                    "min_length": 0,
-                    "max_length": 256,
-                    "required": False,
-                    "placeholder": "Announcement title",
-                },
+    components = [
+        {
+            "type": 18,
+            "label": "Title",
+            "description": "Optional",
+            "component": {
+                "type": 4,
+                "custom_id": "announcement_title",
+                "style": 1,
+                "max_length": 256,
+                "required": False,
+                "placeholder": "Announcement title",
             },
-            {
-                "type": 18,
-                "label": "Description",
-                "description": "Required",
-                "component": {
-                    "type": 4,
-                    "custom_id": "announcement_description",
-                    "style": 2,
-                    "min_length": 1,
-                    "max_length": 4000,
-                    "required": True,
-                    "placeholder": "Write your announcement...",
-                },
+        },
+        {
+            "type": 18,
+            "label": "Description",
+            "description": "Required",
+            "component": {
+                "type": 4,
+                "custom_id": "announcement_description",
+                "style": 2,
+                "min_length": 1,
+                "max_length": 4000,
+                "required": True,
+                "placeholder": "Write your announcement...",
             },
-            {
-                "type": 18,
-                "label": "Footer",
-                "description": "Optional",
-                "component": {
-                    "type": 4,
-                    "custom_id": "announcement_footer",
-                    "style": 1,
-                    "min_length": 0,
-                    "max_length": 2048,
-                    "required": False,
-                    "placeholder": "Optional footer",
-                },
+        },
+        {
+            "type": 18,
+            "label": "Footer",
+            "description": "Optional",
+            "component": {
+                "type": 4,
+                "custom_id": "announcement_footer",
+                "style": 1,
+                "max_length": 2048,
+                "required": False,
+                "placeholder": "Optional footer",
             },
-            {
-                "type": 18,
-                "label": "Image",
-                "description": "Optional image",
-                "component": {
-                    "type": 19,
-                    "custom_id": "announcement_image",
-                    "min_values": 0,
-                    "max_values": 1,
-                    "required": False,
-                    "file_types": {
-                        "values": [
-                            "image/png",
-                            "image/jpeg",
-                            "image/webp",
-                            "image/gif",
-                        ]
-                    },
-                },
+        },
+        {
+            "type": 18,
+            "label": "Image",
+            "description": "Optional image",
+            "component": {
+                "type": 19,
+                "custom_id": "announcement_image",
+                "min_values": 0,
+                "max_values": 1,
+                "required": False,
+                "file_types": {
+                    "values": [
+                        "image/png",
+                        "image/jpeg",
+                        "image/webp",
+                        "image/gif"
+                    ]
+                }
             },
-            {
-                "type": 18,
-                "label": "Thumbnail",
-                "description": "Optional thumbnail",
-                "component": {
-                    "type": 19,
-                    "custom_id": "announcement_thumbnail",
-                    "min_values": 0,
-                    "max_values": 1,
-                    "required": False,
-                    "file_types": {
-                        "values": [
-                            "image/png",
-                            "image/jpeg",
-                            "image/webp",
-                            "image/gif",
-                        ]
-                    },
-                },
-            },
-        ]
-
-        payload = {
-            "type": 9,
-            "data": {
-                "custom_id": custom_id,
-                "title": "Create Announcement",
-                "components": components,
+        },
+        {
+            "type": 18,
+            "label": "Thumbnail",
+            "description": "Optional thumbnail",
+            "component": {
+                "type": 19,
+                "custom_id": "announcement_thumbnail",
+                "min_values": 0,
+                "max_values": 1,
+                "required": False,
+                "file_types": {
+                    "values": [
+                        "image/png",
+                        "image/jpeg",
+                        "image/webp",
+                        "image/gif"
+                    ]
+                }
             },
         }
+    ]
 
-        route = discord.http.Route(
-            "POST",
-            "/interactions/{interaction_id}/{interaction_token}/callback",
-            interaction_id=interaction.id,
-            interaction_token=interaction.token,
-        )
+    payload = {
+        "type": 9,
+        "data": {
+            "custom_id": custom_id,
+            "title": "Create Announcement",
+            "components": components
+        }
+    }
 
-        await self.bot.http.request(
-            route,
-            json=payload,
-        )
+    url = (
+        f"https://discord.com/api/v10/interactions/"
+        f"{interaction.id}/{interaction.token}/callback"
+    )
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response:
+
+                if response.status >= 300:
+                    error = await response.text()
+                    print(
+                        f"[Announcement] Failed to open modal "
+                        f"({response.status}): {error}"
+                    )
+
+    except Exception as exc:
+        print(f"[Announcement] Failed to open modal: {exc}")
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
