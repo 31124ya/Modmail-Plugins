@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import aiohttp
 import discord
 
 from discord.ext import commands
@@ -8,96 +9,6 @@ from discord.ext import commands
 from core import checks
 from core.models import PermissionLevel
 
-class AnnouncementModal(discord.ui.Modal):
-    def __init__(self, custom_id):
-        super().__init__(
-            title="Create Announcement",
-            custom_id=custom_id,
-        )
-
-    def to_components(self):
-        return [
-            {
-                "type": 18,
-                "label": "Title",
-                "description": "Optional",
-                "component": {
-                    "type": 4,
-                    "custom_id": "announcement_title",
-                    "style": 1,
-                    "max_length": 256,
-                    "required": False,
-                    "placeholder": "Announcement title",
-                },
-            },
-            {
-                "type": 18,
-                "label": "Description",
-                "description": "Required",
-                "component": {
-                    "type": 4,
-                    "custom_id": "announcement_description",
-                    "style": 2,
-                    "min_length": 1,
-                    "max_length": 4000,
-                    "required": True,
-                    "placeholder": "Write your announcement...",
-                },
-            },
-            {
-                "type": 18,
-                "label": "Footer",
-                "description": "Optional",
-                "component": {
-                    "type": 4,
-                    "custom_id": "announcement_footer",
-                    "style": 1,
-                    "max_length": 2048,
-                    "required": False,
-                    "placeholder": "Optional footer",
-                },
-            },
-            {
-                "type": 18,
-                "label": "Image",
-                "description": "Optional image",
-                "component": {
-                    "type": 19,
-                    "custom_id": "announcement_image",
-                    "min_values": 0,
-                    "max_values": 1,
-                    "required": False,
-                    "file_types": {
-                        "values": [
-                            "image/png",
-                            "image/jpeg",
-                            "image/webp",
-                            "image/gif",
-                        ]
-                    },
-                },
-            },
-            {
-                "type": 18,
-                "label": "Thumbnail",
-                "description": "Optional thumbnail",
-                "component": {
-                    "type": 19,
-                    "custom_id": "announcement_thumbnail",
-                    "min_values": 0,
-                    "max_values": 1,
-                    "required": False,
-                    "file_types": {
-                        "values": [
-                            "image/png",
-                            "image/jpeg",
-                            "image/webp",
-                            "image/gif",
-                        ]
-                    },
-                },
-            },
-        ]
 
 class AnnouncementPanel(discord.ui.View):
     def __init__(self, cog):
@@ -154,7 +65,7 @@ class AnnouncementPanel(discord.ui.View):
             )
             return
 
-        await self.cog.show_modal(
+        await self.cog.open_modal(
             interaction,
             self.channel.id,
         )
@@ -164,7 +75,9 @@ class AnnouncementPanel(discord.ui.View):
 
         embed = discord.Embed(
             title="Announcement Cancelled",
-            description="The announcement creation process has been cancelled.",
+            description=(
+                "The announcement creation process has been cancelled."
+            ),
             color=self.cog.bot.main_color,
         )
 
@@ -236,41 +149,149 @@ class Announcement(commands.Cog):
             view=view,
         )
 
-    async def show_modal(self, interaction, channel_id):
-    custom_id = (
-        f"{self.MODAL_PREFIX}:"
-        f"{interaction.user.id}:"
-        f"{channel_id}"
-    )
-
-    modal = AnnouncementModal(custom_id)
-
-    try:
-        await interaction.response.send_modal(modal)
-
-    except discord.HTTPException as exc:
-        print(
-            "[Announcement] Failed to open modal:"
-            f" status={exc.status}"
-            f" code={getattr(exc, 'code', None)}"
-            f" text={exc.text}"
+    async def open_modal(
+        self,
+        interaction: discord.Interaction,
+        channel_id: int,
+    ):
+        custom_id = (
+            f"{self.MODAL_PREFIX}:"
+            f"{interaction.user.id}:"
+            f"{channel_id}"
         )
 
-    except Exception as exc:
-        print(
-            "[Announcement] Failed to open modal:"
-            f" {type(exc).__name__}: {exc}"
+        payload = {
+            "type": 9,
+            "data": {
+                "custom_id": custom_id,
+                "title": "Create Announcement",
+                "components": [
+                    {
+                        "type": 18,
+                        "label": "Title",
+                        "description": "Optional",
+                        "component": {
+                            "type": 4,
+                            "custom_id": "announcement_title",
+                            "style": 1,
+                            "max_length": 256,
+                            "required": False,
+                            "placeholder": "Announcement title",
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": "Description",
+                        "description": "Required",
+                        "component": {
+                            "type": 4,
+                            "custom_id": "announcement_description",
+                            "style": 2,
+                            "min_length": 1,
+                            "max_length": 4000,
+                            "required": True,
+                            "placeholder": "Write your announcement...",
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": "Footer",
+                        "description": "Optional",
+                        "component": {
+                            "type": 4,
+                            "custom_id": "announcement_footer",
+                            "style": 1,
+                            "max_length": 2048,
+                            "required": False,
+                            "placeholder": "Optional footer",
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": "Image",
+                        "description": "Optional image",
+                        "component": {
+                            "type": 19,
+                            "custom_id": "announcement_image",
+                            "min_values": 0,
+                            "max_values": 1,
+                            "required": False,
+                            "file_types": {
+                                "values": [
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/webp",
+                                    "image/gif",
+                                ]
+                            },
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": "Thumbnail",
+                        "description": "Optional thumbnail",
+                        "component": {
+                            "type": 19,
+                            "custom_id": "announcement_thumbnail",
+                            "min_values": 0,
+                            "max_values": 1,
+                            "required": False,
+                            "file_types": {
+                                "values": [
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/webp",
+                                    "image/gif",
+                                ]
+                            },
+                        },
+                    },
+                ],
+            },
+        }
+
+        url = (
+            "https://discord.com/api/v10/interactions/"
+            f"{interaction.id}/{interaction.token}/callback"
         )
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    response_text = await response.text()
+
+                    if response.status >= 300:
+                        print(
+                            "[Announcement] Failed to open modal: "
+                            f"HTTP {response.status} "
+                            f"{response_text}"
+                        )
+
+        except Exception as exc:
+            print(
+                "[Announcement] Failed to open modal: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     @commands.Cog.listener()
-    async def on_interaction(self, interaction: discord.Interaction):
+    async def on_interaction(
+        self,
+        interaction: discord.Interaction,
+    ):
         if interaction.type != discord.InteractionType.modal_submit:
             return
 
         data = interaction.data or {}
+
         custom_id = data.get("custom_id", "")
 
-        if not custom_id.startswith(f"{self.MODAL_PREFIX}:"):
+        if not custom_id.startswith(
+            f"{self.MODAL_PREFIX}:"
+        ):
             return
 
         parts = custom_id.split(":")
@@ -285,10 +306,9 @@ class Announcement(commands.Cog):
             return
 
         if interaction.user.id != owner_id:
-            await self.send_interaction_message(
+            await self.safe_interaction_message(
                 interaction,
                 "This announcement editor belongs to another user.",
-                ephemeral=True,
             )
             return
 
@@ -310,10 +330,9 @@ class Announcement(commands.Cog):
         ).strip()
 
         if not description:
-            await self.send_interaction_message(
+            await self.safe_interaction_message(
                 interaction,
                 "Description is required.",
-                ephemeral=True,
             )
             return
 
@@ -321,21 +340,35 @@ class Announcement(commands.Cog):
 
         if channel is None:
             try:
-                channel = await self.bot.fetch_channel(channel_id)
+                channel = await self.bot.fetch_channel(
+                    channel_id
+                )
             except discord.HTTPException:
-                await self.send_interaction_message(
+                await self.safe_interaction_message(
                     interaction,
                     "I couldn't find that channel.",
-                    ephemeral=True,
                 )
                 return
 
-        image = self.get_attachment(
+        if not isinstance(
+            channel,
+            (
+                discord.TextChannel,
+                discord.Thread,
+            ),
+        ):
+            await self.safe_interaction_message(
+                interaction,
+                "That channel cannot receive this announcement.",
+            )
+            return
+
+        image_attachment = self.get_attachment(
             data,
             "announcement_image",
         )
 
-        thumbnail = self.get_attachment(
+        thumbnail_attachment = self.get_attachment(
             data,
             "announcement_thumbnail",
         )
@@ -355,8 +388,13 @@ class Announcement(commands.Cog):
 
         files = []
 
-        if image:
-            image_file = await self.download_attachment(image)
+        image_file = None
+        thumbnail_file = None
+
+        if image_attachment:
+            image_file = await self.download_attachment(
+                image_attachment
+            )
 
             if image_file:
                 files.append(
@@ -367,11 +405,16 @@ class Announcement(commands.Cog):
                 )
 
                 embed.set_image(
-                    url=f"attachment://{image_file['filename']}",
+                    url=(
+                        "attachment://"
+                        f"{image_file['filename']}"
+                    )
                 )
 
-        if thumbnail:
-            thumbnail_file = await self.download_attachment(thumbnail)
+        if thumbnail_attachment:
+            thumbnail_file = await self.download_attachment(
+                thumbnail_attachment
+            )
 
             if thumbnail_file:
                 files.append(
@@ -382,7 +425,10 @@ class Announcement(commands.Cog):
                 )
 
                 embed.set_thumbnail(
-                    url=f"attachment://{thumbnail_file['filename']}",
+                    url=(
+                        "attachment://"
+                        f"{thumbnail_file['filename']}"
+                    )
                 )
 
         try:
@@ -393,80 +439,103 @@ class Announcement(commands.Cog):
             )
 
         except discord.Forbidden:
-            await self.send_interaction_message(
+            await self.safe_interaction_message(
                 interaction,
-                f"I don't have permission to send messages in {channel.mention}.",
-                ephemeral=True,
+                (
+                    "I don't have permission to send "
+                    f"messages in {channel.mention}."
+                ),
             )
             return
 
         except discord.HTTPException as exc:
-            await self.send_interaction_message(
+            await self.safe_interaction_message(
                 interaction,
-                f"Failed to send the announcement.\n`{exc}`",
-                ephemeral=True,
+                (
+                    "Failed to send the announcement.\n"
+                    f"`{exc}`"
+                ),
             )
             return
 
-        await self.send_interaction_message(
+        await self.safe_interaction_message(
             interaction,
-            f"Announcement successfully sent to {channel.mention}.",
-            ephemeral=True,
+            (
+                "Announcement successfully sent to "
+                f"{channel.mention}."
+            ),
         )
 
     def parse_modal_values(self, data):
         values = {}
 
-        for component in data.get("components", []):
-            if component.get("type") == 18:
-                inner = component.get(
-                    "component",
-                    {},
-                )
-
-                custom_id = inner.get("custom_id")
-
-                if not custom_id:
-                    continue
-
-                if inner.get("type") == 4:
-                    values[custom_id] = inner.get(
-                        "value",
-                        "",
-                    )
-
-                elif inner.get("type") == 19:
-                    values[custom_id] = inner.get(
-                        "values",
-                        [],
-                    )
-
-            elif component.get("type") == 1:
-                for inner in component.get(
-                    "components",
-                    [],
-                ):
-                    custom_id = inner.get("custom_id")
-
-                    if not custom_id:
-                        continue
-
-                    if inner.get("type") == 4:
-                        values[custom_id] = inner.get(
-                            "value",
-                            "",
-                        )
-
-                    elif inner.get("type") == 19:
-                        values[custom_id] = inner.get(
-                            "values",
-                            [],
-                        )
+        for component in data.get(
+            "components",
+            [],
+        ):
+            self.parse_component(
+                component,
+                values,
+            )
 
         return values
 
-    def get_attachment(self, data, custom_id):
-        values = self.parse_modal_values(data).get(
+    def parse_component(
+        self,
+        component,
+        values,
+    ):
+        component_type = component.get("type")
+
+        if component_type == 18:
+            inner = component.get(
+                "component",
+                {},
+            )
+
+            custom_id = inner.get(
+                "custom_id",
+            )
+
+            if not custom_id:
+                return
+
+            inner_type = inner.get(
+                "type",
+            )
+
+            if inner_type == 4:
+                values[custom_id] = inner.get(
+                    "value",
+                    "",
+                )
+
+            elif inner_type == 19:
+                values[custom_id] = inner.get(
+                    "values",
+                    [],
+                )
+
+            return
+
+        if component_type == 1:
+            for inner in component.get(
+                "components",
+                [],
+            ):
+                self.parse_component(
+                    inner,
+                    values,
+                )
+
+    def get_attachment(
+        self,
+        data,
+        custom_id,
+    ):
+        values = self.parse_modal_values(
+            data
+        ).get(
             custom_id,
             [],
         )
@@ -474,7 +543,9 @@ class Announcement(commands.Cog):
         if not values:
             return None
 
-        attachment_id = str(values[0])
+        attachment_id = str(
+            values[0]
+        )
 
         resolved = data.get(
             "resolved",
@@ -487,10 +558,13 @@ class Announcement(commands.Cog):
         )
 
         return attachments.get(
-            attachment_id,
+            attachment_id
         )
 
-    async def download_attachment(self, attachment):
+    async def download_attachment(
+        self,
+        attachment,
+    ):
         url = attachment.get("url")
 
         if not url:
@@ -503,13 +577,28 @@ class Announcement(commands.Cog):
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(
+                        total=30
+                    ),
+                ) as response:
+
                     if response.status != 200:
+                        print(
+                            "[Announcement] Failed to "
+                            f"download attachment: "
+                            f"HTTP {response.status}"
+                        )
                         return None
 
                     data = await response.read()
 
-        except Exception:
+        except Exception as exc:
+            print(
+                "[Announcement] Attachment download "
+                f"failed: {type(exc).__name__}: {exc}"
+            )
             return None
 
         return {
@@ -517,37 +606,38 @@ class Announcement(commands.Cog):
             "filename": filename,
         }
 
-    async def send_interaction_message(
+    async def safe_interaction_message(
         self,
         interaction,
         content,
-        ephemeral=False,
     ):
-        flags = 64 if ephemeral else 0
-
-        payload = {
-            "type": 4,
-            "data": {
-                "content": content,
-                "flags": flags,
-            },
-        }
-
-        url = (
-            f"https://discord.com/api/v10/interactions/"
-            f"{interaction.id}/{interaction.token}/callback"
-        )
-
         try:
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=5),
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    content,
+                    ephemeral=True,
                 )
-        except Exception:
-            pass
+            else:
+                await interaction.response.send_message(
+                    content,
+                    ephemeral=True,
+                )
+
+        except discord.HTTPException as exc:
+            print(
+                "[Announcement] Failed to respond to "
+                f"interaction: {exc}"
+            )
+
+        except Exception as exc:
+            print(
+                "[Announcement] Failed to respond to "
+                f"interaction: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
 
 async def setup(bot):
-    await bot.add_cog(Announcement(bot))
+    await bot.add_cog(
+        Announcement(bot)
+    )
