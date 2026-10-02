@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import aiohttp
 import discord
 
 from discord.ext import commands
@@ -8,135 +10,11 @@ from core import checks
 from core.models import PermissionLevel
 
 
-class AnnouncementModal(discord.ui.Modal, title="Create Announcement"):
-    title_input = discord.ui.Label(
-        text="Title",
-        description="Optional",
-        component=discord.ui.TextInput(
-            custom_id="announcement_title",
-            placeholder="Announcement title",
-            max_length=256,
-            required=False,
-        ),
-    )
-
-    description_input = discord.ui.Label(
-        text="Description",
-        description="Required",
-        component=discord.ui.TextInput(
-            custom_id="announcement_description",
-            placeholder="Write your announcement...",
-            style=discord.TextStyle.paragraph,
-            max_length=4000,
-            required=True,
-        ),
-    )
-
-    footer_input = discord.ui.Label(
-        text="Footer",
-        description="Optional",
-        component=discord.ui.TextInput(
-            custom_id="announcement_footer",
-            placeholder="Optional footer",
-            max_length=2048,
-            required=False,
-        ),
-    )
-
-    image_upload = discord.ui.Label(
-        text="Image",
-        description="Optional",
-        component=discord.ui.FileUpload(
-            custom_id="announcement_image",
-            min_values=0,
-            max_values=1,
-            required=False,
-        ),
-    )
-
-    thumbnail_upload = discord.ui.Label(
-        text="Thumbnail",
-        description="Optional",
-        component=discord.ui.FileUpload(
-            custom_id="announcement_thumbnail",
-            min_values=0,
-            max_values=1,
-            required=False,
-        ),
-    )
-
-    def __init__(self, cog: "Announcement", channel: discord.TextChannel):
-        super().__init__()
-        self.cog = cog
-        self.channel = channel
-
-    async def on_submit(self, interaction: discord.Interaction):
-        title = self.title_input.component.value.strip()
-        description = self.description_input.component.value.strip()
-        footer = self.footer_input.component.value.strip()
-
-        image = None
-        thumbnail = None
-
-        if self.image_upload.values:
-            image = self.image_upload.values[0]
-
-        if self.thumbnail_upload.values:
-            thumbnail = self.thumbnail_upload.values[0]
-
-        embed = discord.Embed(
-            description=description,
-            color=self.cog.bot.main_color,
-        )
-
-        if title:
-            embed.title = title
-
-        if footer:
-            embed.set_footer(text=footer)
-
-        files = []
-
-        if image:
-            image_file = await image.to_file()
-            files.append(image_file)
-            embed.set_image(url=f"attachment://{image_file.filename}")
-
-        if thumbnail:
-            thumbnail_file = await thumbnail.to_file()
-            files.append(thumbnail_file)
-            embed.set_thumbnail(url=f"attachment://{thumbnail_file.filename}")
-
-        try:
-            await self.channel.send(
-                embed=embed,
-                files=files,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                f"I don't have permission to send messages in {self.channel.mention}.",
-                ephemeral=True,
-            )
-            return
-        except discord.HTTPException as exc:
-            await interaction.response.send_message(
-                f"Failed to send the announcement.\n`{exc}`",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            f"Announcement successfully sent to {self.channel.mention}.",
-            ephemeral=True,
-        )
-
-
 class AnnouncementPanel(discord.ui.View):
-    def __init__(self, cog: "Announcement"):
+    def __init__(self, cog):
         super().__init__(timeout=300)
         self.cog = cog
-        self.channel: discord.TextChannel | discord.NewsChannel | None = None
+        self.channel = None
 
         self.channel_select = discord.ui.ChannelSelect(
             placeholder="Select a channel",
@@ -146,7 +24,6 @@ class AnnouncementPanel(discord.ui.View):
             ],
             min_values=1,
             max_values=1,
-            custom_id="announcement_channel_select",
         )
 
         self.channel_select.callback = self.channel_selected
@@ -155,7 +32,6 @@ class AnnouncementPanel(discord.ui.View):
         self.create_button = discord.ui.Button(
             label="Create Announcement",
             style=discord.ButtonStyle.primary,
-            custom_id="announcement_create",
             disabled=True,
         )
 
@@ -165,7 +41,6 @@ class AnnouncementPanel(discord.ui.View):
         self.cancel_button = discord.ui.Button(
             label="Cancel",
             style=discord.ButtonStyle.secondary,
-            custom_id="announcement_cancel",
         )
 
         self.cancel_button.callback = self.cancel
@@ -173,11 +48,12 @@ class AnnouncementPanel(discord.ui.View):
 
     async def channel_selected(self, interaction: discord.Interaction):
         self.channel = self.channel_select.values[0]
-
         self.create_button.disabled = False
 
+        embed = self.build_embed()
+
         await interaction.response.edit_message(
-            embed=self.build_embed(),
+            embed=embed,
             view=self,
         )
 
@@ -189,31 +65,31 @@ class AnnouncementPanel(discord.ui.View):
             )
             return
 
-        modal = AnnouncementModal(
-            self.cog,
-            self.channel,
+        await self.cog.show_modal(
+            interaction,
+            self.channel.id,
         )
-
-        await interaction.response.send_modal(modal)
 
     async def cancel(self, interaction: discord.Interaction):
         self.stop()
 
+        embed = discord.Embed(
+            title="Announcement Cancelled",
+            description="The announcement creation process has been cancelled.",
+            color=self.cog.bot.main_color,
+        )
+
         await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="Announcement Cancelled",
-                description="The announcement creation process has been cancelled.",
-                color=self.cog.bot.main_color,
-            ),
+            embed=embed,
             view=None,
         )
 
-    def build_embed(self) -> discord.Embed:
+    def build_embed(self):
         embed = discord.Embed(
             title="Announcement Creation",
             description=(
-                "Create a new announcement.\n\n"
-                "Select the channel where the announcement should be sent, "
+                "Create a new embed announcement.\n\n"
+                "Select the channel where the announcement will be sent, "
                 "then click **Create Announcement**."
             ),
             color=self.cog.bot.main_color,
@@ -240,7 +116,9 @@ class AnnouncementPanel(discord.ui.View):
 
 
 class Announcement(commands.Cog):
-    __doc__ = "Create embed announcements with a simple interactive panel."
+    __doc__ = "Create embed announcements."
+
+    MODAL_PREFIX = "announcement_modal"
 
     def __init__(self, bot):
         self.bot = bot
@@ -248,18 +126,12 @@ class Announcement(commands.Cog):
     @commands.command(name="announce")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def announce(self, ctx: commands.Context):
-        """
-        Open the announcement creation panel.
-        """
-
         embed = discord.Embed(
             title="Announcement Creation",
             description=(
-                "Create an embed announcement.\n\n"
-                "1. Select the destination channel.\n"
-                "2. Click **Create Announcement**.\n"
-                "3. Fill in the announcement and optionally upload "
-                "an image or thumbnail."
+                "Create a new embed announcement.\n\n"
+                "Select the destination channel below, "
+                "then continue to the announcement editor."
             ),
             color=self.bot.main_color,
         )
@@ -274,6 +146,347 @@ class Announcement(commands.Cog):
             embed=embed,
             view=view,
         )
+
+    async def show_modal(self, interaction, channel_id):
+        custom_id = f"{self.MODAL_PREFIX}:{interaction.user.id}:{channel_id}"
+
+        components = [
+            {
+                "type": 18,
+                "label": "Title",
+                "description": "Optional",
+                "component": {
+                    "type": 4,
+                    "custom_id": "announcement_title",
+                    "style": 1,
+                    "min_length": 0,
+                    "max_length": 256,
+                    "required": False,
+                    "placeholder": "Announcement title",
+                },
+            },
+            {
+                "type": 18,
+                "label": "Description",
+                "description": "Required",
+                "component": {
+                    "type": 4,
+                    "custom_id": "announcement_description",
+                    "style": 2,
+                    "min_length": 1,
+                    "max_length": 4000,
+                    "required": True,
+                    "placeholder": "Write your announcement...",
+                },
+            },
+            {
+                "type": 18,
+                "label": "Footer",
+                "description": "Optional",
+                "component": {
+                    "type": 4,
+                    "custom_id": "announcement_footer",
+                    "style": 1,
+                    "min_length": 0,
+                    "max_length": 2048,
+                    "required": False,
+                    "placeholder": "Optional footer",
+                },
+            },
+            {
+                "type": 18,
+                "label": "Image",
+                "description": "Optional image",
+                "component": {
+                    "type": 19,
+                    "custom_id": "announcement_image",
+                    "min_values": 0,
+                    "max_values": 1,
+                    "required": False,
+                    "file_types": {
+                        "values": [
+                            "image/png",
+                            "image/jpeg",
+                            "image/webp",
+                            "image/gif",
+                        ]
+                    },
+                },
+            },
+            {
+                "type": 18,
+                "label": "Thumbnail",
+                "description": "Optional thumbnail",
+                "component": {
+                    "type": 19,
+                    "custom_id": "announcement_thumbnail",
+                    "min_values": 0,
+                    "max_values": 1,
+                    "required": False,
+                    "file_types": {
+                        "values": [
+                            "image/png",
+                            "image/jpeg",
+                            "image/webp",
+                            "image/gif",
+                        ]
+                    },
+                },
+            },
+        ]
+
+        payload = {
+            "type": 9,
+            "data": {
+                "custom_id": custom_id,
+                "title": "Create Announcement",
+                "components": components,
+            },
+        }
+
+        route = discord.http.Route(
+            "POST",
+            "/interactions/{interaction_id}/{interaction_token}/callback",
+            interaction_id=interaction.id,
+            interaction_token=interaction.token,
+        )
+
+        await self.bot.http.request(
+            route,
+            json=payload,
+        )
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.modal_submit:
+            return
+
+        data = interaction.data or {}
+        custom_id = data.get("custom_id", "")
+
+        if not custom_id.startswith(f"{self.MODAL_PREFIX}:"):
+            return
+
+        parts = custom_id.split(":")
+
+        if len(parts) != 3:
+            return
+
+        try:
+            owner_id = int(parts[1])
+            channel_id = int(parts[2])
+        except ValueError:
+            return
+
+        if interaction.user.id != owner_id:
+            await self.send_interaction_message(
+                interaction,
+                "This announcement editor belongs to another user.",
+                ephemeral=True,
+            )
+            return
+
+        values = self.parse_modal_values(data)
+
+        description = values.get("announcement_description", "").strip()
+        title = values.get("announcement_title", "").strip()
+        footer = values.get("announcement_footer", "").strip()
+
+        if not description:
+            await self.send_interaction_message(
+                interaction,
+                "Description is required.",
+                ephemeral=True,
+            )
+            return
+
+        channel = self.bot.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except discord.HTTPException:
+                await self.send_interaction_message(
+                    interaction,
+                    "I couldn't find that channel.",
+                    ephemeral=True,
+                )
+                return
+
+        image = self.get_attachment(data, "announcement_image")
+        thumbnail = self.get_attachment(data, "announcement_thumbnail")
+
+        embed = discord.Embed(
+            description=description,
+            color=self.bot.main_color,
+        )
+
+        if title:
+            embed.title = title
+
+        if footer:
+            embed.set_footer(text=footer)
+
+        files = []
+
+        if image:
+            image_file = await self.download_attachment(image)
+
+            if image_file:
+                files.append(
+                    discord.File(
+                        image_file["data"],
+                        filename=image_file["filename"],
+                    )
+                )
+
+                embed.set_image(
+                    url=f"attachment://{image_file['filename']}"
+                )
+
+        if thumbnail:
+            thumbnail_file = await self.download_attachment(thumbnail)
+
+            if thumbnail_file:
+                files.append(
+                    discord.File(
+                        thumbnail_file["data"],
+                        filename=thumbnail_file["filename"],
+                    )
+                )
+
+                embed.set_thumbnail(
+                    url=f"attachment://{thumbnail_file['filename']}"
+                )
+
+        try:
+            await channel.send(
+                embed=embed,
+                files=files,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            await self.send_interaction_message(
+                interaction,
+                f"I don't have permission to send messages in {channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        except discord.HTTPException as exc:
+            await self.send_interaction_message(
+                interaction,
+                f"Failed to send the announcement.\n`{exc}`",
+                ephemeral=True,
+            )
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Announcement successfully sent to {channel.mention}.",
+            ephemeral=True,
+        )
+
+    def parse_modal_values(self, data):
+        values = {}
+
+        for component in data.get("components", []):
+            if component.get("type") == 18:
+                inner = component.get("component", {})
+
+                custom_id = inner.get("custom_id")
+
+                if not custom_id:
+                    continue
+
+                if inner.get("type") == 4:
+                    values[custom_id] = inner.get("value", "")
+
+                elif inner.get("type") == 19:
+                    values[custom_id] = inner.get("values", [])
+
+            elif component.get("type") == 1:
+                for inner in component.get("components", []):
+                    custom_id = inner.get("custom_id")
+
+                    if not custom_id:
+                        continue
+
+                    if inner.get("type") == 4:
+                        values[custom_id] = inner.get("value", "")
+
+                    elif inner.get("type") == 19:
+                        values[custom_id] = inner.get("values", [])
+
+        return values
+
+    def get_attachment(self, data, custom_id):
+        values = self.parse_modal_values(data).get(custom_id, [])
+
+        if not values:
+            return None
+
+        attachment_id = str(values[0])
+
+        resolved = data.get("resolved", {})
+        attachments = resolved.get("attachments", {})
+
+        return attachments.get(attachment_id)
+
+    async def download_attachment(self, attachment):
+        url = attachment.get("url")
+
+        if not url:
+            return None
+
+        filename = attachment.get("filename", "image")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        return None
+
+                    data = await response.read()
+
+        except Exception:
+            return None
+
+        return {
+            "data": io.BytesIO(data),
+            "filename": filename,
+        }
+
+    async def send_interaction_message(
+        self,
+        interaction,
+        content,
+        ephemeral=False,
+    ):
+        flags = 64 if ephemeral else 0
+
+        payload = {
+            "type": 4,
+            "data": {
+                "content": content,
+                "flags": flags,
+            },
+        }
+
+        route = discord.http.Route(
+            "POST",
+            "/interactions/{interaction_id}/{interaction_token}/callback",
+            interaction_id=interaction.id,
+            interaction_token=interaction.token,
+        )
+
+        try:
+            await self.bot.http.request(
+                route,
+                json=payload,
+            )
+        except discord.HTTPException:
+            pass
 
 
 async def setup(bot):
